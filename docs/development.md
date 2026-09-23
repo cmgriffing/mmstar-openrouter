@@ -28,6 +28,7 @@ pnpm typecheck         # tsc/astro check across all packages
 pnpm lint              # Biome
 pnpm test              # Vitest
 pnpm check             # typecheck + lint + test in one Turbo run
+pnpm schema            # regenerate mmstar.config.schema.json from config rules
 ```
 
 Use `pnpm install --frozen-lockfile` in CI or when verifying a clean install.
@@ -65,7 +66,12 @@ a Turbo pass-through variable and must never be written to configuration or arti
 
 - **Shared packages stay runtime-neutral.** `packages/config`, `packages/benchmark`,
   and `packages/results` must not import Bun/Node/OpenTUI/Astro APIs. Runtime adapters
-  belong in `apps/runner` or `apps/web`. See `docs/architecture.md`.
+  belong in `apps/runner` or `apps/web`. See `docs/architecture.md`. Test-only Node builtin
+  declarations may live in a `*.d.ts` next to tests (for example
+  `packages/benchmark/src/test-node.d.ts`) so tests can read the committed dataset without
+  adding Node globals to shared source.
+- **Package dependencies flow one way:** `@mmstar/config` → `@mmstar/results` →
+  `@mmstar/benchmark`. Keep it acyclic; records embed plans and events embed records.
 - **Shared packages export TypeScript source** and have no build step; the workspace
   typecheck is the compile gate.
 - **Biome** owns formatting and linting for `.ts`/`.tsx`/`.json`. `.astro` files are
@@ -91,6 +97,9 @@ This repository is implemented in numbered chunks (see
 will not receive it through Git: to continue there, copy the change directory (including
 `handoffs/`) explicitly, or start from the tracked `docs/` and the change's
 `proposal.md`. Builds and checks must never depend on ignored planning files.
+
+Contract and config reference material lives in tracked docs: `docs/configuration.md` and
+`docs/contracts.md`.
 
 ## Troubleshooting
 

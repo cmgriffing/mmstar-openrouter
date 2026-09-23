@@ -13,7 +13,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "biome check src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "schema": "bun run scripts/generate-schema.ts"
   },
   "devDependencies": {
     "typescript": "catalog:",

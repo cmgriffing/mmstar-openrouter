@@ -15,6 +15,7 @@
     "test": "turbo run test",
     "check": "turbo run typecheck lint test",
     "format": "biome format --write .",
+    "schema": "pnpm --filter @mmstar/config schema",
     "validate": "turbo run validate",
     "benchmark": "turbo run benchmark",
     "resume": "turbo run resume",

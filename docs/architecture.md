@@ -16,25 +16,30 @@ format. See the MMStar citation in `README.md`.
 | --- | --- | --- | --- |
 | Runner | `apps/runner` | Bun + OpenTUI React | CLI commands (`validate`, `benchmark`, `resume`, `retry-failed`, `restart`, `export`), interactive TUI, headless/plain output |
 | Website | `apps/web` | Astro + React islands | Read-only comparisons and fixture drilldown over one immutable publication |
-| Config contracts | `packages/config` | Runtime-neutral TypeScript | Versioned JSON configuration, dataset metadata, evaluation-plan expansion |
-| Benchmark contracts | `packages/benchmark` | Runtime-neutral TypeScript | Prompt/scorer versions, provider request/response contracts, scheduling, metrics |
-| Results contracts | `packages/results` | Runtime-neutral TypeScript | Versioned run records, recovery lineage, publication queries |
+| Config contracts | `packages/config` | Runtime-neutral TypeScript | Versioned JSON configuration and validation, generated editor schema, deterministic evaluation-plan expansion |
+| Benchmark contracts | `packages/benchmark` | Runtime-neutral TypeScript | MMStar TSV ingestion, prompt/scorer contracts, typed engine events, provider contracts, scheduling, metrics |
+| Results contracts | `packages/results` | Runtime-neutral TypeScript | Versioned run/evaluation/outcome/attempt records, recovery lineage, publication queries |
 
 Planned flow:
 
 ```
-MMStar.tsv ─┐
-            ├─> packages/config ──> frozen plan ──> packages/benchmark engine
-config JSON ┘                                             │
-                                                          ▼
-                                              results/<timestamp>_<run-id>/*.json
-                                                          │
-                                                          ▼
-                                        packages/results export ──> SQLite + image assets
-                                                          │
-                                                          ▼
-                                                  apps/web publication
+config JSON ──> packages/config ──> frozen plan ──────────────┐
+                                                             ├──> packages/benchmark engine
+MMStar.tsv ──> packages/benchmark (bounded dataset parse) ───┘              │
+                                                                            ▼
+                                                      results/<timestamp>_<run-id>/*.json
+                                                          (packages/results records)
+                                                                            │
+                                                                            ▼
+                                              packages/results export ──> SQLite + image assets
+                                                                            │
+                                                                            ▼
+                                                                    apps/web publication
 ```
+
+Dependency direction is linear: `@mmstar/config` → `@mmstar/results` → `@mmstar/benchmark`.
+Run records embed the frozen plan, and engine events embed record classifications, without
+import cycles. Nothing imports in the reverse direction.
 
 ## Runtime boundaries
 
@@ -60,6 +65,10 @@ Shared packages are private and export their TypeScript source directly
 (`"exports": { ".": "./src/index.ts" }`). Bun, Vite/Astro, and Vitest all consume the
 source, so there is no library build step and no stale `dist/` to manage. Type safety
 comes from `pnpm typecheck` across the workspace, not from emitted declarations.
+
+Concrete contracts, schema versions, dataset bounds, and record shapes are documented in
+[`docs/contracts.md`](./contracts.md); config fields and reasoning semantics are documented
+in [`docs/configuration.md`](./configuration.md).
 
 `apps/runner` is the only build with an artifact: `bun build` bundles the CLI entry
 point. The TUI runs directly from source through Bun.

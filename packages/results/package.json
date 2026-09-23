@@ -15,6 +15,9 @@
     "lint": "biome check src",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@mmstar/config": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "catalog:",
     "vitest": "catalog:"

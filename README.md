@@ -9,6 +9,8 @@ The end goal is to have a verifiable set of data that can be used to make inform
 Workspace documentation:
 
 - [`docs/architecture.md`](./docs/architecture.md) — components, runtime boundaries, and the results/publication model
+- [`docs/configuration.md`](./docs/configuration.md) — `mmstar.config.json` fields, reasoning modes, and routing settings
+- [`docs/contracts.md`](./docs/contracts.md) — dataset parsing, schema versions, run records, and engine events
 - [`docs/development.md`](./docs/development.md) — pinned toolchain, commands, conventions, and the bounded-session workflow
 
 Quick start:

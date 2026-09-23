@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MMStar OpenRouter runner configuration",
+  "description": "Versioned configuration for MMStar benchmark runs. Credentials never belong here; the runner reads OPENROUTER_API_KEY from the environment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "models",
+    "sets"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this schema, typically \"mmstar.config.schema.json\"."
+    },
+    "version": {
+      "const": 1,
+      "description": "Configuration schema version."
+    },
+    "dataset": {
+      "$ref": "#/$defs/dataset"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "models": {
+      "type": "object",
+      "description": "Named model aliases, expanded into evaluations by sets.",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/modelAlias"
+      }
+    },
+    "sets": {
+      "type": "object",
+      "description": "Named sets of model aliases that runs can select.",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/set"
+      }
+    }
+  },
+  "$defs": {
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dataset path relative to the working directory.",
+          "default": "MMStar.tsv"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrentGroups": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "default": 4,
+          "description": "Rate-limit groups allowed to have work in flight at once."
+        },
+        "maxRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 3,
+          "description": "Retries after the initial attempt; 3 allows at most four attempts."
+        },
+        "requestTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000,
+          "default": 120000,
+          "description": "Per-request timeout in milliseconds."
+        },
+        "maxRequestsPerMinute": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 60000,
+          "description": "Account-wide request cap, or null for no configured cap."
+        },
+        "resultsRoot": {
+          "type": "string",
+          "minLength": 1,
+          "default": "results",
+          "description": "Root directory for run artifacts, relative to the working directory."
+        }
+      }
+    },
+    "modelAlias": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "openRouterId",
+        "reasoningModes",
+        "rateLimitGroup"
+      ],
+      "properties": {
+        "openRouterId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9~][A-Za-z0-9~._-]*\\/[A-Za-z0-9~][A-Za-z0-9~._-]*$",
+          "description": "Fixed OpenRouter model ID such as \"vendor/model\"."
+        },
+        "reasoningModes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "default",
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "description": "Ordered reasoning modes; each mode becomes one evaluation."
+        },
+        "rateLimitGroup": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "description": "Shared rate-limit group serializing all of its evaluations."
+        },
+        "provider": {
+          "$ref": "#/$defs/providerRouting"
+        }
+      }
+    },
+    "providerRouting": {
+      "type": "object",
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "only",
+          "ignore"
+        ]
+      },
+      "properties": {
+        "only": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "uniqueItems": true,
+          "description": "Providers allowed to serve the model."
+        },
+        "order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "uniqueItems": true,
+          "description": "Preferred provider order."
+        },
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "uniqueItems": true,
+          "description": "Providers excluded from serving the model."
+        },
+        "allowFallbacks": {
+          "type": "boolean",
+          "description": "Whether fallback providers may serve when preferred ones are unavailable."
+        },
+        "sort": {
+          "enum": [
+            "price",
+            "throughput",
+            "latency"
+          ],
+          "description": "Routing preference when several providers are eligible."
+        }
+      }
+    },
+    "set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models"
+      ],
+      "properties": {
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "description": "Ordered model alias references."
+        }
+      }
+    }
+  }
+}
