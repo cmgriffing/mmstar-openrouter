@@ -31,6 +31,7 @@ import type {
   OutcomeKind,
   OutcomeRecord,
   OutcomeState,
+  RecoveryLineage,
   RunState,
 } from "@mmstar/results";
 import type { PromptFixtureInput } from "./dataset";
@@ -56,6 +57,12 @@ export interface EngineFixture {
   category: string;
   expectedAnswer: string;
   prompt: PromptFixtureInput;
+  /**
+   * Recovery lineage for this fixture's outcomes. A recovery/restart execution
+   * passes the source run/outcome IDs so the new records link back to the
+   * failure they resolve; original work leaves this undefined.
+   */
+  lineage?: RecoveryLineage;
 }
 
 /** One provider submission. `apps/runner` binds `OpenRouterClient.chatCompletion`. */
@@ -194,7 +201,12 @@ export class BenchmarkEngine {
           evaluation,
           fixture,
           prompt: buildPrompt(fixture.prompt),
-          outcome: pendingOutcome(evaluation.evaluationId, fixture, this.iso(this.clock.now())),
+          outcome: pendingOutcome(
+            evaluation.evaluationId,
+            fixture,
+            this.iso(this.clock.now()),
+            fixture.lineage ?? { sourceRunId: null, sourceOutcomeId: null },
+          ),
           attempts: [],
           nextAttemptNumber: 1,
           firstAttemptAtMs: null,
@@ -550,7 +562,7 @@ export class BenchmarkEngine {
       attemptCount: item.attempts.length,
       indeterminate: outcome.indeterminate,
       failure: outcome.failure,
-      lineage: { sourceRunId: null, sourceOutcomeId: null },
+      lineage: item.fixture.lineage ?? { sourceRunId: null, sourceOutcomeId: null },
       updatedAt: this.iso(nowMs),
     };
     item.outcome = record;
@@ -703,6 +715,7 @@ function pendingOutcome(
   evaluationId: string,
   fixture: EngineFixture,
   updatedAt: string,
+  lineage: RecoveryLineage,
 ): OutcomeRecord {
   return {
     fixtureId: fixture.fixtureId,
@@ -719,7 +732,7 @@ function pendingOutcome(
     attemptCount: 0,
     indeterminate: false,
     failure: null,
-    lineage: { sourceRunId: null, sourceOutcomeId: null },
+    lineage,
     updatedAt,
   };
 }

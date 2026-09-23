@@ -12,6 +12,9 @@ catalogs:
     '@types/bun':
       specifier: 1.4.2
       version: 1.4.2
+    '@types/node':
+      specifier: 26.6.2
+      version: 26.6.2
     '@types/react':
       specifier: 19.3.0
       version: 19.3.0
@@ -122,6 +125,9 @@ importers:
         specifier: workspace:*
         version: link:../results
     devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -144,6 +150,9 @@ importers:
         specifier: workspace:*
         version: link:../config
     devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

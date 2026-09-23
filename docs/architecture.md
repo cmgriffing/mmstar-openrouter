@@ -95,11 +95,17 @@ wired in chunk 5; the TUI in chunks 6–7 consumes the typed events.
 
 ## Results and publication model
 
-Benchmark runs write immutable JSON under `results/` (timestamped run directory, frozen
-manifest, per-model files with all attempts). Export validates that JSON and produces a
-SQLite publication plus content-addressed images under generated asset directories.
-Generated results, publication assets, and images are Git-ignored; `MMStar.tsv` stays
-the single committed image source. Publication and website details land in chunks 8–10.
+Benchmark runs write immutable JSON under `results/`: a timestamped run directory, a
+frozen `manifest.json` (plan, capability snapshots, lifecycle), and one model file per
+alias containing every effort variant and attempt. A single locked writer checkpoints
+atomically (temp file + rename) after attempt starts and after terminal outcomes, so a
+crash always leaves a complete previous file. `resume` reconstructs progress from the
+validated model files, `retry-failed` creates a linked recovery run, and `restart`
+creates a new primary run from the original frozen settings. Export validates that JSON
+and produces a SQLite publication plus content-addressed images under generated asset
+directories. Generated results, publication assets, and images are Git-ignored;
+`MMStar.tsv` stays the single committed image source. Command and recovery semantics are
+documented in `docs/runner.md`; publication and website details land in chunks 8–10.
 
 ## Planning and sessions
 
