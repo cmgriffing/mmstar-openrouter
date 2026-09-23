@@ -63,6 +63,12 @@ export type EngineEvent =
       modelUsed: string | null;
       /** Upstream provider that served the response; null when unknown. */
       upstreamProvider: string | null;
+      /**
+       * ISO-8601 time of the scheduled retry, or null/absent when this attempt
+       * is terminal. Additive optional field; consumers from earlier versions
+       * can ignore it.
+       */
+      retryAt?: string | null;
     })
   | (EngineEventBase & {
       type: "outcome.settled";

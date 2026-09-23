@@ -80,6 +80,12 @@ export interface RunContext {
   emit: (payload: Record<string, unknown>) => void;
   /** Optional typed engine-event subscriber for an interactive renderer. */
   engineEvents?: EngineEventSink;
+  /**
+   * Called once per run when the engine exists, for read-only observation and
+   * graceful controls. The TUI uses this for metrics, fixture inspection, and
+   * pause/stop; it never moves scheduling into the renderer.
+   */
+  observeEngine?: (engine: BenchmarkEngine, control: EngineObserver) => void;
   revision?: () => Promise<{ revision: string | null; dirty: boolean }>;
   /** Injected provider for tests; defaults to a fail-closed stub. */
   provider?: CompletionProvider;
@@ -87,6 +93,17 @@ export interface RunContext {
 
 export interface CommandResult {
   exitCode: number;
+}
+
+/**
+ * Read-only control surface exposed to an observing renderer. `stop` is a
+ * graceful interruption: in-flight attempts are cancelled and recorded, and
+ * the command exits with the interrupted status.
+ */
+export interface EngineObserver {
+  pause(): void;
+  resume(): void;
+  stop(reason: "user" | "signal"): void;
 }
 
 export type RunRequest =
@@ -523,15 +540,18 @@ async function executeManifest(input: ExecuteManifestInput): Promise<CommandResu
   });
 
   let interrupted = false;
-  const stop = (reason: "user" | "signal"): void => {
+  const stop = (reason: "user" | "signal" | "error"): void => {
+    if (reason !== "error") interrupted = true;
     context.emit({ event: "engine.stop-requested", runId: manifest.runId, reason });
     engine.stop(reason);
   };
-  const onSignal = (): void => {
-    interrupted = true;
-    stop("signal");
-  };
+  const onSignal = (): void => stop("signal");
   const disposeSignals = registerSignalHandlers(onSignal);
+  context.observeEngine?.(engine, {
+    pause: () => engine.pause(),
+    resume: () => engine.resume(),
+    stop: (reason) => stop(reason),
+  });
 
   checkpoint(store, manifest, input, engine.getRecords());
 

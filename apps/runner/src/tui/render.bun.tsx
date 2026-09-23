@@ -8,7 +8,7 @@
  * verified as rendered — not just as computed strings.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import type { EngineEvent } from "@mmstar/benchmark";
+import type { EngineEvent, EngineMetrics } from "@mmstar/benchmark";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { act } from "react";
@@ -93,9 +93,19 @@ function seededStore(): RunViewStore {
   return store;
 }
 
-async function renderApp(store: RunViewStore, width: number, height: number) {
+async function renderApp(
+  store: RunViewStore,
+  width: number,
+  height: number,
+  callbacks: {
+    onQuit?: () => void;
+    onPause?: () => void;
+    onResume?: () => void;
+    onInspect?: (evaluationId: string, fixtureId: string) => void;
+  } = {},
+) {
   const setup = await testRender(
-    <RunnerTui store={store} now={() => Date.parse(AT)} tickMs={0} />,
+    <RunnerTui store={store} now={() => Date.parse(AT)} tickMs={0} {...callbacks} />,
     { width, height },
   );
   setups.push(setup);
@@ -112,13 +122,49 @@ function linesWith(frame: string, needle: string): string[] {
 /** The stdin parser flushes buffered input on a short timeout. */
 async function press(
   setup: TestRendererSetup,
-  input: (keys: TestRendererSetup["mockInput"]) => void,
+  input: (keys: TestRendererSetup["mockInput"]) => void | Promise<void>,
 ) {
   await act(async () => {
-    input(setup.mockInput);
+    await input(setup.mockInput);
     await new Promise((resolve) => setTimeout(resolve, 40));
     await setup.flush();
   });
+}
+
+function metrics(): EngineMetrics {
+  return {
+    provisional: true,
+    totalSelected: 15,
+    settledCount: 12,
+    coverage: 0.8,
+    correctCount: 9,
+    totalSelectedAccuracy: 0.6,
+    scoredResponseCount: 11,
+    scoredResponseAccuracy: 9 / 11,
+    stateCounts: [],
+    outcomeCounts: [],
+    failureCounts: [],
+    categoryMetrics: [
+      { category: "math", selected: 4, settled: 4, correct: 3, coverage: 1, accuracy: 0.75 },
+    ],
+    tokens: {
+      promptTokens: 1_500,
+      completionTokens: 75,
+      totalTokens: 1_575,
+      reasoningTokens: 300,
+      usageUnknownCount: 2,
+    },
+    costs: { reportedUsd: 0.012, estimatedUsd: 0.003, knownUsd: 0.015, unknownCount: 2 },
+    requestLatency: {
+      count: 11,
+      minMs: 400,
+      maxMs: 5_000,
+      meanMs: 1_800,
+      p50Ms: 1_200,
+      p95Ms: 3_400,
+    },
+    fixtureLatency: { count: 0, minMs: null, maxMs: null, meanMs: null, p50Ms: null, p95Ms: null },
+  };
 }
 
 describe("RunnerTui rendering", () => {
@@ -217,5 +263,206 @@ describe("RunnerTui rendering", () => {
     expect(store.getSnapshot().activity.length).toBeLessThanOrEqual(MAX_ACTIVITY);
     expect(frame).toContain("fixture 499");
     expect(frame).not.toContain("fixture 0 ");
+  });
+
+  test("renders provisional metrics with distinct cost kinds", async () => {
+    const store = seededStore();
+    store.applyMetrics(metrics());
+    const setup = await renderApp(store, 120, 34);
+    const frame = setup.captureCharFrame();
+
+    expect(frame).toContain("[PROVISIONAL]");
+    expect(frame).toContain("accuracy");
+    expect(frame).toContain("p50 1.2s");
+    expect(frame).toContain("known $0.0150");
+    expect(frame).toContain("estimated $0.0030");
+    expect(frame).toContain("math 75%");
+  });
+
+  test("inspects the selected activity entry and closes the detail pane", async () => {
+    const store = seededStore();
+    const inspected: string[] = [];
+    const setup = await renderApp(store, 110, 32, {
+      onInspect: (evaluationId, fixtureId) => {
+        inspected.push(`${evaluationId}:${fixtureId}`);
+        store.applyDetail({
+          evaluationId,
+          modelAlias: "alpha",
+          reasoningMode: "high",
+          fixtureId,
+          category: "math",
+          question: "Which option best answers the question?",
+          state: "failed",
+          kind: null,
+          parsedAnswer: null,
+          expectedAnswer: "A",
+          responseText: null,
+          indeterminate: false,
+          failure: {
+            category: "rate_limit",
+            message: "too many requests",
+            httpStatus: 429,
+            retryAfterMs: null,
+          },
+          lineage: { sourceRunId: null, sourceOutcomeId: null },
+          retryAtMs: null,
+          attempts: [],
+        });
+      },
+    });
+
+    await press(setup, (keys) => keys.pressTab());
+    await press(setup, (keys) => keys.pressEnter());
+
+    expect(inspected).toEqual(["alpha::high:3"]);
+    const detailFrame = setup.captureCharFrame();
+    expect(detailFrame).toContain("Fixture detail");
+    expect(detailFrame).toContain("question:");
+    expect(detailFrame).toContain("expected A");
+    expect(detailFrame).toContain("failure: rate_limit");
+
+    await press(setup, (keys) => keys.pressEscape());
+    const closed = setup.captureCharFrame();
+    expect(closed).not.toContain("Fixture detail");
+    expect(closed).toContain("Activity");
+  });
+
+  test("scrolls a long response in the detail pane", async () => {
+    const store = seededStore();
+    const responseText = Array.from({ length: 120 }, (_, index) => `word${index}`).join(" ");
+    store.applyDetail({
+      evaluationId: "alpha::high",
+      modelAlias: "alpha",
+      reasoningMode: "high",
+      fixtureId: "3",
+      category: "math",
+      question: "Question?",
+      state: "settled",
+      kind: "incorrect",
+      parsedAnswer: "B",
+      expectedAnswer: "A",
+      responseText,
+      indeterminate: false,
+      failure: null,
+      lineage: { sourceRunId: null, sourceOutcomeId: null },
+      retryAtMs: null,
+      attempts: [],
+    });
+
+    const setup = await renderApp(store, 80, 24);
+    expect(setup.captureCharFrame()).toContain("Question?");
+
+    await press(setup, (keys) => keys.pressKey("\u001B[6~"));
+    expect(setup.captureCharFrame()).toContain("word0");
+
+    for (let index = 0; index < 12; index++) {
+      await press(setup, (keys) => keys.pressKey("\u001B[6~"));
+    }
+    expect(setup.captureCharFrame()).toContain("word119");
+
+    await press(setup, (keys) => keys.pressKey("\u001B[H"));
+    expect(setup.captureCharFrame()).toContain("Question?");
+  });
+
+  test("filters activity from the keyboard", async () => {
+    const store = seededStore();
+    store.applyEngineEvent(
+      event("outcome.settled", {
+        evaluationId: "alpha::high",
+        fixtureId: "4",
+        state: "settled",
+        kind: "incorrect",
+        requestLatencyMs: null,
+        totalFixtureTimeMs: null,
+      }),
+    );
+    const setup = await renderApp(store, 110, 32);
+
+    await press(setup, (keys) => keys.pressKey("f"));
+    expect(setup.captureCharFrame()).toContain("filter:");
+    await press(setup, async (keys) => {
+      await keys.typeText("failure");
+    });
+
+    const typing = setup.captureCharFrame();
+    expect(typing).toContain("filter: failure_");
+    expect(typing).toContain("fixture 3");
+    expect(typing).not.toContain("fixture 4");
+
+    await press(setup, (keys) => keys.pressEnter());
+    expect(setup.captureCharFrame()).toContain("[filter: failure]");
+  });
+
+  test("keeps the detail pane usable on a narrow terminal", async () => {
+    const store = seededStore();
+    store.applyMetrics(metrics());
+    store.applyDetail({
+      evaluationId: "alpha::high",
+      modelAlias: "alpha",
+      reasoningMode: "high",
+      fixtureId: "3",
+      category: "math",
+      question: "Compact layout question?",
+      state: "settled",
+      kind: "incorrect",
+      parsedAnswer: "B",
+      expectedAnswer: "A",
+      responseText: "B",
+      indeterminate: false,
+      failure: null,
+      lineage: { sourceRunId: null, sourceOutcomeId: null },
+      retryAtMs: null,
+      attempts: [],
+    });
+
+    const setup = await renderApp(store, 60, 18);
+    expect(setup.captureCharFrame()).toContain("Fixture detail");
+    expect(setup.captureCharFrame()).toContain("fixture 3");
+
+    await press(setup, (keys) => keys.pressKey("\u001B[6~"));
+    expect(setup.captureCharFrame()).toContain("Compact layout question?");
+  });
+
+  test("routes pause, continue, and quit to the entry point", async () => {
+    const store = seededStore();
+    const calls: string[] = [];
+    const setup = await renderApp(store, 100, 30, {
+      onQuit: () => calls.push("quit"),
+      onPause: () => calls.push("pause"),
+      onResume: () => calls.push("resume"),
+    });
+
+    await press(setup, (keys) => keys.pressKey("p"));
+    await press(setup, (keys) => keys.pressKey("c"));
+    await press(setup, (keys) => keys.pressKey("q"));
+
+    expect(calls).toEqual(["pause", "resume", "quit"]);
+  });
+
+  test("reflows between full and compact layouts on resize", async () => {
+    const store = seededStore();
+    store.applyMetrics(metrics());
+    const setup = await renderApp(store, 100, 30);
+
+    expect(setup.captureCharFrame()).toContain("p:provider-x");
+    expect(setup.captureCharFrame()).toContain("[PROVISIONAL]");
+
+    await act(async () => {
+      setup.resize(60, 18);
+      // The renderer debounces resize events; let the layout settle.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await setup.flush();
+    });
+    const compact = setup.captureCharFrame();
+    expect(compact).not.toContain("p:provider-x");
+    expect(compact).toContain("provider-x");
+    expect(compact).toContain("[PROVISIONAL]");
+
+    await act(async () => {
+      setup.resize(110, 32);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await setup.flush();
+    });
+    expect(setup.captureCharFrame()).toContain("p:provider-x");
   });
 });

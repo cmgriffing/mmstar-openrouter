@@ -61,8 +61,10 @@ pnpm --filter @mmstar/runner demo         # deterministic mock run, no credentia
 pnpm --filter @mmstar/runner smoke        # render briefly, then exit (PTY check)
 ```
 
-TUI behavior is covered by Vitest (pure view-state, formatting, and line builders)
-plus Bun-native frame tests that drive OpenTUI's test renderer;
+TUI behavior is covered by Vitest (pure view-state, formatting, and line builders,
+fixture inspection assembly, and headless non-TTY entry-point checks) plus Bun-native
+frame tests that drive OpenTUI's test renderer, including resize, filtering, fixture
+detail scrolling, and control callbacks;
 `pnpm --filter @mmstar/runner test` runs both suites. The demo command never makes a
 network request, so PTY checks work without `OPENROUTER_API_KEY`.
 
@@ -115,8 +117,9 @@ Contract and config reference material lives in tracked docs: `docs/configuratio
   reinstall.
 - **OpenTUI fails to start.** Confirm Bun matches `.bun-version` and that the platform
   native package (`@opentui/core-<platform>`) resolved during install. Run
-  `pnpm --filter @mmstar/runner smoke` under a terminal; a non-TTY still renders but is
-  not the supported interactive path.
+  `pnpm --filter @mmstar/runner smoke` under a terminal. When stdout is not a TTY, or
+  `--plain` is passed, the entry point does not start a renderer at all: it emits the
+  same machine-readable events as the plain CLI.
 - **Turbo served a benchmark command from cache.** It should not; verify the task is
   listed with `"cache": false` in `turbo.json` and never invoke provider commands
   through `turbo run` with a cacheable task name.

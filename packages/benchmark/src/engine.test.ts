@@ -401,6 +401,45 @@ describe("BenchmarkEngine events", () => {
       expect(event).toMatchObject({ modelUsed: null, upstreamProvider: null });
     }
   });
+
+  it("advertises the scheduled retry time only while a retry is pending", async () => {
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a")],
+      fixtures: [fixture("0")],
+      execution: { maxRetries: 1 },
+      latencyMs: 10,
+      random: () => 0.5,
+      respond: (_call, index) => (index === 0 ? fail("network") : ok("A")),
+    });
+
+    await h.run();
+
+    const finished = h.events.filter((event) => event.type === "attempt.finished");
+    expect(finished).toHaveLength(2);
+    const first = finished[0];
+    const second = finished[1];
+    if (first?.type !== "attempt.finished" || second?.type !== "attempt.finished") {
+      throw new Error("expected attempt.finished events");
+    }
+    expect(first.retryAt).toBe(new Date(T0 + 10 + 250 + 0.5 * (1_000 - 250)).toISOString());
+    expect(second.retryAt).toBeNull();
+  });
+
+  it("exposes read-only fixture metadata without the image bytes", () => {
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a")],
+      fixtures: [fixture("7", "B", "physics")],
+      respond: () => ok("B"),
+    });
+
+    expect(h.engine.getFixtureDetail("7")).toEqual({
+      fixtureId: "7",
+      category: "physics",
+      question: "Question 7?",
+      expectedAnswer: "B",
+    });
+    expect(h.engine.getFixtureDetail("missing")).toBeNull();
+  });
 });
 
 describe("BenchmarkEngine retries and outcomes", () => {

@@ -93,7 +93,11 @@ classified transient failures retry with jittered backoff, and every attempt is 
 before submission and after completion. Durable persistence and recovery commands are
 wired in chunk 5; the interactive TUI consumes the same typed events through
 `RunContext.engineEvents` and a bounded, renderer-independent view store
-(`apps/runner/src/tui/state.ts`), with controls wired in chunk 7.
+(`apps/runner/src/tui/state.ts`). `RunContext.observeEngine` hands the entry point a
+read-only control surface (pause/resume/graceful stop) plus snapshots for metrics,
+fixture inspection, and retry countdowns, so the React tree only reads view state and
+requests actions. Non-TTY and `--plain` invocations bypass the renderer entirely and
+reuse the plain CLI path with the same engine and exit codes.
 
 ## Results and publication model
 

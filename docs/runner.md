@@ -20,16 +20,21 @@ mmstar <command> [options]
 | `export` | Publication export (chunk 8). |
 
 Exit codes: `0` success, `1` runtime failure (invalid run, provider halt, incomplete
-work), `2` usage or validation error, `130` interrupted before completion.
+work), `2` usage or validation error, `130` interrupted before completion (SIGINT or a
+TUI graceful quit).
 
 ## Terminal UI
 
 `bun run src/index.tsx <command>` (or `pnpm --filter @mmstar/runner dev -- <command>`)
 runs the same commands as the plain CLI but renders typed engine events in an
-OpenTUI React screen instead of NDJSON: run identity, progress and an elapsed/remaining
-estimate, one row per model/effort with its rate-limit group, observed provider,
-attempts, and cooldown countdown, terminal outcome counts, and a bounded activity
-history.
+OpenTUI React screen instead of NDJSON. The header shows run identity, progress and an
+elapsed/remaining estimate, terminal outcome counts, cooldowns and retry countdowns,
+and a live metrics block: provisional/final markers, scored and total-selected
+accuracy with explicit denominators, coverage, category breakdown, latency
+percentiles, token usage, and known/reported/estimated/unknown costs kept distinct.
+Missing values render as `—`, never as zero. Below that, one row per model/effort
+shows its rate-limit group, observed provider, attempts, and status token, and the
+activity pane lists failures, wrong answers, and control events.
 
 ```bash
 pnpm --filter @mmstar/runner dev -- benchmark --set smoke
@@ -37,17 +42,38 @@ pnpm --filter @mmstar/runner demo         # deterministic mock run, no credentia
 pnpm --filter @mmstar/runner smoke        # render briefly, then exit (PTY check)
 ```
 
-Keyboard: `?` help, `↑/↓` move row focus, `Tab` switch pane, `PgUp/PgDn`/`Home`/`End`
-scroll activity, `q` quit after the run settles. Statuses use text tokens (`[RUN]`,
-`[COOL]`, `[WAIT]`, `[DONE]`, `[FAIL]`) so they never depend on color; narrow
-terminals drop the provider prefix and shorten columns.
+Keyboard:
+
+| Key | Action |
+| --- | --- |
+| `↑/↓` | move model/group row focus, or the activity selection when that pane is focused |
+| `Tab` | switch pane focus between models and activity |
+| `Enter` | inspect the selected activity entry (fixture detail) |
+| `Esc` | close fixture detail, or clear an active filter |
+| `f` | filter activity by kind, fixture ID, model alias, or failure text (`failure` shows only failures) |
+| `p` / `c` | pause / continue scheduling (in-flight work settles; no new requests start) |
+| `PgUp/PgDn`, `Home/End` | scroll activity or a long fixture response |
+| `?` | help overlay |
+| `q` / Ctrl-C | graceful quit |
+
+Fixture detail shows the question, parsed and expected answer, the retained
+response, every attempt (state, provider, latency, tokens, cost), failure category
+and message, and recovery lineage. A pathological response is truncated at 20,000
+characters with an explicit marker; ordinary long responses are wrapped and fully
+reachable with the scroll keys (no image rendering in the terminal).
+
+Statuses use text tokens (`[RUN]`, `[COOL]`, `[WAIT]`, `[DONE]`, `[FAIL]`) so they
+never depend on color; narrow terminals drop the provider prefix, shorten columns and
+the metrics block, and hide panes rather than overflowing.
 
 `--demo` drives the real engine with a deterministic mock provider (scripted
 cooldown, retry, and permanent failure) and exits when the run finishes; `--hold`
-keeps the final frame until `q`. In this chunk the TUI is a monitor: a `q` during
-in-flight work is deferred until the run settles, and pause/resume plus non-TTY
-plain output arrive in the next chunk. The run ID and final state are printed after
-the terminal is restored.
+keeps the final frame until `q`. Quitting (`q`, Ctrl-C, or SIGINT) is a graceful stop:
+no new requests start, in-flight attempts are aborted and recorded as `cancelled`,
+checkpoints are written, the terminal is restored, and the run ID plus final state are
+printed. When stdout is not a TTY, or `--plain` is passed, the entry point never
+starts a renderer: it runs the same engine through the plain CLI (or emits demo
+engine events as NDJSON) with the same exit codes and no terminal control sequences.
 
 ## Run directory layout
 

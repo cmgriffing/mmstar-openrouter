@@ -8,19 +8,24 @@
  * deterministic mock benchmark for PTY/rendering checks, so no network or
  * credentials are involved.
  *
- * Controls are intentionally minimal in this chunk: `q`/Ctrl-C are accepted,
- * but a quit request while work is in flight is deferred until the run settles,
- * because pause/quit wiring lands in chunk 7.
+ * When stdout is not a TTY, or `--plain` is passed, the entry point delegates
+ * to the plain CLI (or emits NDJSON demo events): same engine, same exit codes,
+ * no terminal control sequences. Ctrl-C and `q` are graceful stops: in-flight
+ * attempts are cancelled and recorded, checkpoints are written, and only then
+ * is the terminal restored.
  */
+import type { BenchmarkEngine } from "@mmstar/benchmark";
 import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
+import { runCli } from "./cli";
 import { formatCommandUsage, formatUsage, parseCommand } from "./commands";
 import { buildRunContext } from "./context";
-import { execute, type RunContext, requestFromArgs } from "./execute";
+import { type EngineObserver, execute, type RunContext, requestFromArgs } from "./execute";
 import { flagsForCommand, parseFlags } from "./flags";
 import { RunnerTui } from "./tui/App";
-import { DEMO_RUN_ID, demoEvaluations, runDemo } from "./tui/demo";
-import { type RunnerViewState, RunViewStore } from "./tui/state";
+import { createDemoEngine, DEMO_RUN_ID, demoEvaluations } from "./tui/demo";
+import { buildFixtureDetail } from "./tui/inspection";
+import { RunViewStore } from "./tui/state";
 import { executeValidate } from "./validate";
 
 interface TuiOptions {
@@ -28,6 +33,7 @@ interface TuiOptions {
   smoke: boolean;
   hold: boolean;
   exitOnFinish: boolean;
+  plain: boolean;
   runArgs: string[];
 }
 
@@ -37,6 +43,7 @@ function parseTuiArgs(argv: readonly string[]): TuiOptions {
   let smoke = false;
   let hold = false;
   let exitOnFinish = false;
+  let plain = false;
   for (const arg of argv) {
     switch (arg) {
       case "--demo":
@@ -53,20 +60,25 @@ function parseTuiArgs(argv: readonly string[]): TuiOptions {
       case "--exit-on-finish":
         exitOnFinish = true;
         break;
+      case "--plain":
+        plain = true;
+        break;
       default:
         runArgs.push(arg);
     }
   }
-  return { demo, smoke, hold, exitOnFinish, runArgs };
+  return { demo, smoke, hold, exitOnFinish, plain, runArgs };
 }
 
 function formatTuiUsage(): string {
   return [
     "Usage: mmstar-tui <command> [options]",
-    "       mmstar-tui --demo [--hold]",
+    "       mmstar-tui --demo [--hold] [--plain]",
     "",
     "Interactive monitor for runner commands; events come from the same headless",
-    "engine as the plain CLI. Commands:",
+    "engine as the plain CLI. When stdout is not a TTY, or --plain is given, the",
+    "command runs headlessly and writes NDJSON events instead of rendering.",
+    "Commands:",
     "",
     ...formatUsage().split("\n").slice(2),
     "",
@@ -74,8 +86,9 @@ function formatTuiUsage(): string {
     "  --demo             deterministic mock run (no network, no credentials)",
     "  --hold             stay on the final frame after a demo run until q",
     "  --exit-on-finish   exit automatically when the run settles",
+    "  --plain            never render; use the machine-readable output path",
     "",
-    "Keyboard: ? help · ↑/↓ rows · Tab pane · PgUp/PgDn scroll · q quit",
+    "Keyboard: ? help · ↑/↓ select · Enter inspect · f filter · p/c pause/continue · q quit",
   ].join("\n");
 }
 
@@ -87,12 +100,17 @@ const ndjson = (payload: Record<string, unknown>): void => {
   stdout(JSON.stringify(payload));
 };
 
-function stateLabel(state: RunnerViewState): string {
+function stateLabel(state: ReturnType<RunViewStore["getSnapshot"]>): string {
   return state.finalState ?? (state.finished ? "completed" : state.status);
 }
 
 async function main(): Promise<number> {
   const options = parseTuiArgs(process.argv.slice(2));
+
+  // Non-TTY output cannot be rendered honestly: route to the plain path, which
+  // uses the same engine and emits the same machine-readable events.
+  const interactive = !options.plain && process.stdout.isTTY === true;
+  if (!interactive) return runPlain(options);
 
   if (options.demo) return runDemoTui(options);
 
@@ -144,6 +162,26 @@ async function main(): Promise<number> {
   return runCommandTui(request.request, request.context, options);
 }
 
+/** Headless path: identical engine and exit codes, NDJSON on stdout only. */
+async function runPlain(options: TuiOptions): Promise<number> {
+  if (!options.demo) return runCli(options.runArgs);
+
+  const fixtureCount = options.smoke ? 2 : 8;
+  const engine = createDemoEngine({
+    fixtureCount,
+    latencyMs: options.smoke ? 5 : 25,
+    rateLimitRetryAfterMs: options.smoke ? 20 : 600,
+    sink: (event) => {
+      process.stdout.write(
+        `${JSON.stringify({ event: "engine", runId: DEMO_RUN_ID, ...event })}\n`,
+      );
+    },
+  });
+  const result = await engine.run();
+  process.stderr.write(`mmstar: run ${DEMO_RUN_ID} ${result.state}\n`);
+  return result.state === "completed" ? 0 : 1;
+}
+
 /** Create the renderer, run the command, and keep watching until quit/exit. */
 async function runCommandTui(
   request: Parameters<typeof execute>[0],
@@ -156,17 +194,67 @@ async function runCommandTui(
   const root = createRoot(renderer);
 
   let exitCode: number | null = null;
-  const requestQuit = (): void => {
-    if (exitCode === null) {
-      store.addNotice(
-        "finishing the current run before quit; pause/quit controls arrive in chunk 7",
-      );
+  let engine: BenchmarkEngine | null = null;
+  let control: EngineObserver | null = null;
+  let metricsTimer: ReturnType<typeof setInterval> | null = null;
+  let quitRequested = false;
+
+  const refreshMetrics = (): void => {
+    if (engine !== null) store.applyMetrics(engine.getMetrics());
+  };
+  const stopMetrics = (): void => {
+    if (metricsTimer !== null) {
+      clearInterval(metricsTimer);
+      metricsTimer = null;
+    }
+  };
+  const inspect = (evaluationId: string, fixtureId: string): void => {
+    if (engine === null) {
+      store.addNotice("no engine is running; nothing to inspect yet");
       return;
     }
-    quit.resolve();
+    const row = store.getSnapshot().rows.find((entry) => entry.evaluationId === evaluationId);
+    const detail = buildFixtureDetail({
+      engine,
+      modelAlias: row?.modelAlias ?? evaluationId,
+      evaluationId,
+      fixtureId,
+    });
+    if (detail === null) {
+      store.addNotice(`fixture ${fixtureId} has no durable record yet`);
+      return;
+    }
+    store.applyDetail(detail);
   };
+  const requestQuit = (): void => {
+    if (exitCode !== null) {
+      quit.resolve();
+      return;
+    }
+    if (quitRequested) return;
+    quitRequested = true;
+    if (control === null) {
+      store.addNotice("stopping before the first request is submitted");
+      return;
+    }
+    store.addNotice("stopping: cancelling in-flight work and checkpointing");
+    control.stop("user");
+  };
+  const onSignal = (): void => {
+    quitRequested = true;
+    control?.stop("signal");
+  };
+  const disposeSignals = registerSignals(onSignal);
 
-  root.render(<RunnerTui store={store} onQuit={requestQuit} />);
+  root.render(
+    <RunnerTui
+      store={store}
+      onQuit={requestQuit}
+      onPause={() => control?.pause()}
+      onResume={() => control?.resume()}
+      onInspect={inspect}
+    />,
+  );
 
   try {
     const context: RunContext = {
@@ -176,27 +264,38 @@ async function runCommandTui(
         engineEvents: (event) => store.applyEngineEvent(event),
       }),
       ...overrides,
+      observeEngine: (created, engineControl) => {
+        engine = created;
+        control = engineControl;
+        refreshMetrics();
+        if (metricsTimer === null) metricsTimer = setInterval(refreshMetrics, 500);
+        // A quit requested while config/dataset loading was still running must
+        // cancel the run as soon as the engine exists.
+        if (quitRequested) engineControl.stop("signal");
+      },
     };
     const result = await execute(request, context);
     exitCode = result.exitCode;
-    if (!store.getSnapshot().finished) {
-      store.applyLifecycleEvent({
-        event: "run.finished",
-        runId: store.getSnapshot().runId,
-        state: result.exitCode === 0 ? "completed" : "failed",
-      });
-    }
   } catch (error) {
     store.addNotice(error instanceof Error ? error.message : String(error));
     exitCode = 1;
+  } finally {
+    disposeSignals();
+    stopMetrics();
+    refreshMetrics();
   }
 
-  if (options.exitOnFinish) {
-    await sleep(400);
-  } else {
-    await quit.promise;
+  if (!store.getSnapshot().finished) {
+    store.applyLifecycleEvent({
+      event: "run.finished",
+      runId: store.getSnapshot().runId,
+      state: exitCode === 0 ? "completed" : "failed",
+    });
   }
-  return restore(renderer, root, store, exitCode);
+  if (quitRequested) quit.resolve();
+  if (options.exitOnFinish) await sleep(400);
+  else await quit.promise;
+  return restore(renderer, root, store, exitCode ?? 0);
 }
 
 async function runDemoTui(options: TuiOptions): Promise<number> {
@@ -206,6 +305,47 @@ async function runDemoTui(options: TuiOptions): Promise<number> {
   const root = createRoot(renderer);
 
   const fixtureCount = options.smoke ? 2 : 8;
+  const engine = createDemoEngine({
+    fixtureCount,
+    latencyMs: options.smoke ? 5 : 25,
+    rateLimitRetryAfterMs: options.smoke ? 20 : 600,
+    sink: (event) => store.applyEngineEvent(event),
+  });
+
+  let exitCode: number | null = null;
+  let quitRequested = false;
+  const refreshMetrics = (): void => store.applyMetrics(engine.getMetrics());
+  const metricsTimer = setInterval(refreshMetrics, 100);
+  const inspect = (evaluationId: string, fixtureId: string): void => {
+    const row = store.getSnapshot().rows.find((entry) => entry.evaluationId === evaluationId);
+    const detail = buildFixtureDetail({
+      engine,
+      modelAlias: row?.modelAlias ?? evaluationId,
+      evaluationId,
+      fixtureId,
+    });
+    if (detail === null) {
+      store.addNotice(`fixture ${fixtureId} has no durable record yet`);
+      return;
+    }
+    store.applyDetail(detail);
+  };
+  const requestQuit = (): void => {
+    if (exitCode !== null) {
+      quit.resolve();
+      return;
+    }
+    if (quitRequested) return;
+    quitRequested = true;
+    store.addNotice("stopping: cancelling in-flight work and checkpointing");
+    engine.stop("user");
+  };
+  const onSignal = (): void => {
+    quitRequested = true;
+    engine.stop("signal");
+  };
+  const disposeSignals = registerSignals(onSignal);
+
   store.applyLifecycleEvent({
     event: "run.created",
     runId: DEMO_RUN_ID,
@@ -215,38 +355,32 @@ async function runDemoTui(options: TuiOptions): Promise<number> {
     fixtures: fixtureCount,
   });
 
-  let settled = false;
   root.render(
     <RunnerTui
       store={store}
-      onQuit={() => {
-        if (settled) quit.resolve();
-        else store.addNotice("demo run still executing");
-      }}
+      onQuit={requestQuit}
+      onPause={() => engine.pause()}
+      onResume={() => engine.resume()}
+      onInspect={inspect}
     />,
   );
 
-  let exitCode = 0;
   try {
-    const result = await runDemo({
-      fixtureCount,
-      latencyMs: options.smoke ? 5 : 25,
-      rateLimitRetryAfterMs: options.smoke ? 20 : 600,
-      sink: (event) => store.applyEngineEvent(event),
-    });
-    if (result.state !== "completed") exitCode = 1;
+    const result = await engine.run();
+    exitCode = result.state === "completed" ? 0 : result.state === "stopped" ? 130 : 1;
   } catch (error) {
     store.addNotice(error instanceof Error ? error.message : String(error));
     exitCode = 1;
+  } finally {
+    disposeSignals();
+    clearInterval(metricsTimer);
+    refreshMetrics();
   }
-  settled = true;
 
-  if (options.hold) {
-    await quit.promise;
-  } else {
-    await sleep(options.smoke ? 250 : 500);
-  }
-  return restore(renderer, root, store, exitCode);
+  if (quitRequested) quit.resolve();
+  if (options.hold) await quit.promise;
+  else await sleep(options.smoke ? 250 : 500);
+  return restore(renderer, root, store, exitCode ?? 0);
 }
 
 function createQuitSignal(): { promise: Promise<void>; resolve: () => void } {
@@ -255,6 +389,15 @@ function createQuitSignal(): { promise: Promise<void>; resolve: () => void } {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+function registerSignals(handler: () => void): () => void {
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+  return () => {
+    process.off("SIGINT", handler);
+    process.off("SIGTERM", handler);
+  };
 }
 
 function sleep(ms: number): Promise<void> {

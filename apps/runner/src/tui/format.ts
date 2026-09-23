@@ -42,6 +42,25 @@ export function formatPercent(ratio: number | null): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
+/**
+ * USD amount. Null means unknown and never renders as `$0`; tiny nonzero sums
+ * stay distinguishable from zero and from each other.
+ */
+export function formatUsd(value: number | null): string {
+  if (value === null) return EM_DASH;
+  if (value === 0) return "$0";
+  const magnitude = Math.abs(value);
+  if (magnitude >= 0.0001) return `$${value.toFixed(4)}`;
+  return `$${value.toExponential(2)}`;
+}
+
+/** Integer counts, abbreviating thousands so a wide total cannot crowd a line. */
+export function formatCount(value: number | null): string {
+  if (value === null) return EM_DASH;
+  if (Math.abs(value) < 1_000) return String(value);
+  return `${(value / 1_000).toFixed(1)}k`;
+}
+
 /** Fixed-width ASCII progress bar; no color or wide glyphs required. */
 export function formatProgressBar(done: number, total: number, width: number): string {
   const columns = Math.max(0, Math.floor(width));

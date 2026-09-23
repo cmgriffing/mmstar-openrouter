@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { CompletionProvider, NormalizedCompletion, ProviderResult } from "@mmstar/benchmark";
 import { RunStore } from "@mmstar/results/node";
 import { describe, expect, it } from "vitest";
-import { execute, type RunContext } from "../src/execute";
+import { type EngineObserver, execute, type RunContext } from "../src/execute";
 import { executeValidate } from "../src/validate";
 
 const T0 = Date.parse("2026-09-23T03:33:37.000Z");
@@ -211,6 +211,67 @@ describe("run command (5.1, 5.2)", () => {
       // The run finished event carries the durable counts.
       const finished = h.events.find((event) => event.event === "run.finished");
       expect(finished).toMatchObject({ state: "completed", settled: 4, total: 4, remaining: 0 });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("exposes engine controls to an observer and treats a user stop as interrupted", async () => {
+    // The provider waits for the abort signal, so the engine is still running
+    // when the observer's stop request arrives — the real TUI quit path.
+    const hangingProvider: CompletionProvider = async (_payload, control) => {
+      await new Promise<void>((resolve) => {
+        if (control.signal.aborted) {
+          resolve();
+          return;
+        }
+        control.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return {
+        ok: false,
+        failure: {
+          category: "cancelled",
+          message: "cancelled by observer",
+          httpStatus: null,
+          retryAfterMs: null,
+        },
+        rawResponse: null,
+      };
+    };
+    const h = harness({ provider: hangingProvider });
+    try {
+      const holder: { control: EngineObserver | null } = { control: null };
+      const observed: string[] = [];
+      const runPromise = execute(
+        { mode: "run", set: "demo" },
+        {
+          ...h.context,
+          observeEngine: (_engine, control) => {
+            holder.control = control;
+            observed.push("observed");
+          },
+        },
+      );
+
+      // Config/dataset loading is async, so wait for the engine to exist.
+      for (let i = 0; i < 100 && holder.control === null; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(observed).toEqual(["observed"]);
+
+      holder.control?.pause();
+      holder.control?.resume();
+      holder.control?.stop("user");
+
+      const result = await runPromise;
+      expect(result.exitCode).toBe(130);
+      const finished = h.events.find((event) => event.event === "run.finished");
+      expect(finished?.state).toBe("stopped");
+      expect(h.events.some((event) => event.event === "engine.stop-requested")).toBe(true);
+      // Shutdown checkpoints leave the cancelled work durable and resumable.
+      const runId = lastRunId(h);
+      const manifest = readManifest(h, runId);
+      expect(manifest.lifecycle).toMatchObject({ state: "stopped" });
     } finally {
       h.cleanup();
     }

@@ -142,9 +142,12 @@ runtime; `apps/runner/src/transport.ts` is the only `fetch` implementation.
 never raw response text — so event batching and bounded UI history cannot be inflated by
 provider output. `evaluation.started` also carries `openRouterId` and `rateLimitGroup`,
 and `attempt.finished` carries `modelUsed`/`upstreamProvider` (null when no response
-arrived), so a renderer can show the active model/group and observed provider without
-reading engine internals. Rendering consumes events; scheduling and persistence never
-depend on a renderer.
+arrived) plus an optional `retryAt` (the scheduled retry time, or null when the attempt
+is terminal), so a renderer can show the active model/group, observed provider, and a
+live retry countdown without reading engine internals. Rendering consumes events;
+scheduling and persistence never depend on a renderer. `BenchmarkEngine.getMetrics()`
+and `getRecords()` expose read-only snapshots, and `getFixtureDetail(fixtureId)` exposes
+category/question/expected-answer metadata (never image bytes) for inspection UIs.
 
 ## Execution engine
 

@@ -1,16 +1,23 @@
-import type { EngineEvent } from "@mmstar/benchmark";
+import type { EngineEvent, EngineMetrics } from "@mmstar/benchmark";
 import { describe, expect, it } from "vitest";
 import {
   activeCooldown,
+  activeRetries,
+  activeRetryFor,
+  applyDetail,
   applyEngineEvent,
   applyLifecycleEvent,
+  applyMetrics,
   completedCount,
   estimateRemainingMs,
+  filterActivity,
   initialViewState,
   MAX_ACTIVITY,
+  MAX_PENDING_RETRIES,
   type RunnerViewState,
   RunViewStore,
   rowStatus,
+  selectedActivityEntry,
 } from "./state";
 
 const AT = "2026-09-23T00:00:00.000Z";
@@ -94,6 +101,63 @@ function firstRow(state: RunnerViewState): NonNullable<RunnerViewState["rows"][n
   const row = state.rows[0];
   if (row === undefined) throw new Error("expected a row");
   return row;
+}
+
+function failedAttempt(
+  state: RunnerViewState,
+  fixtureId: string,
+  options: { retryAt?: string | null; alias?: string } = {},
+) {
+  return applyEngineEvent(
+    state,
+    event("attempt.finished", {
+      evaluationId: `${options.alias ?? "alpha"}::high`,
+      fixtureId,
+      attemptNumber: 1,
+      state: "failed",
+      failure: {
+        category: "network",
+        message: "network failure",
+        httpStatus: null,
+        retryAfterMs: null,
+      },
+      usage: null,
+      cost: { kind: "unknown", usd: null },
+      modelUsed: null,
+      upstreamProvider: null,
+      retryAt: options.retryAt ?? "2026-09-23T00:00:05.000Z",
+    }),
+  );
+}
+
+function metrics(overrides: Partial<EngineMetrics> = {}): EngineMetrics {
+  return {
+    provisional: true,
+    totalSelected: 4,
+    settledCount: 3,
+    coverage: 0.75,
+    correctCount: 2,
+    totalSelectedAccuracy: 0.5,
+    scoredResponseCount: 3,
+    scoredResponseAccuracy: 2 / 3,
+    stateCounts: [],
+    outcomeCounts: [],
+    failureCounts: [],
+    categoryMetrics: [
+      { category: "math", selected: 2, settled: 2, correct: 2, coverage: 1, accuracy: 1 },
+    ],
+    tokens: {
+      promptTokens: 100,
+      completionTokens: 10,
+      totalTokens: 110,
+      reasoningTokens: null,
+      usageUnknownCount: 1,
+    },
+    costs: { reportedUsd: null, estimatedUsd: null, knownUsd: null, unknownCount: 3 },
+    requestLatency: { count: 0, minMs: null, maxMs: null, meanMs: null, p50Ms: null, p95Ms: null },
+    fixtureLatency: { count: 0, minMs: null, maxMs: null, meanMs: null, p50Ms: null, p95Ms: null },
+    ...overrides,
+  };
 }
 
 describe("RunViewStore engine-state reduction", () => {
@@ -299,6 +363,116 @@ describe("RunViewStore engine-state reduction", () => {
     expect(state.paused).toBe(false);
     state = applyEngineEvent(state, event("engine.stopping", { reason: "signal" }));
     expect(state.stopping).toBe("signal");
+  });
+
+  it("tracks a scheduled retry countdown until the attempt resumes or settles", () => {
+    let state = withEvaluation(started());
+    state = failedAttempt(state, "0");
+
+    expect(activeRetryFor(state, "alpha::high", "0", Date.parse(AT))).toMatchObject({
+      fixtureId: "0",
+      retryAtMs: Date.parse("2026-09-23T00:00:05.000Z"),
+    });
+    expect(activeRetries(state, Date.parse(AT))).toHaveLength(1);
+    expect(activeRetries(state, Date.parse("2026-09-23T00:00:06.000Z"))).toHaveLength(0);
+
+    state = applyEngineEvent(
+      state,
+      event("attempt.started", {
+        evaluationId: "alpha::high",
+        fixtureId: "0",
+        attemptNumber: 2,
+      }),
+    );
+    expect(state.pendingRetries).toHaveLength(0);
+
+    state = failedAttempt(state, "1");
+    state = settle(state, "1", "indeterminate");
+    expect(state.pendingRetries).toHaveLength(0);
+  });
+
+  it("drops retry countdowns when the run finishes and bounds the list", () => {
+    let state = withEvaluation(started());
+    for (let index = 0; index < MAX_PENDING_RETRIES * 2; index++) {
+      state = failedAttempt(state, String(index));
+    }
+    expect(state.pendingRetries.length).toBeLessThanOrEqual(MAX_PENDING_RETRIES);
+
+    state = applyEngineEvent(state, event("run.finished", { runId: "run-1", state: "failed" }));
+    expect(state.pendingRetries).toHaveLength(0);
+  });
+
+  it("tags activity entries with kind and fixture identity for filtering", () => {
+    let state = withEvaluation(started());
+    state = failedAttempt(state, "0");
+    state = settle(state, "1", "settled", "incorrect");
+    state = settle(state, "2", "failed");
+
+    expect(state.activity.at(-3)).toMatchObject({
+      kind: "failure",
+      evaluationId: "alpha::high",
+      fixtureId: "0",
+    });
+    expect(state.activity.at(-2)).toMatchObject({ kind: "outcome", fixtureId: "1" });
+    expect(state.activity.at(-1)).toMatchObject({ kind: "failure", fixtureId: "2" });
+  });
+});
+
+describe("RunViewStore metrics and detail", () => {
+  it("applies a metrics snapshot without re-deriving it from rows", () => {
+    const snapshot = metrics({ provisional: false });
+    const state = applyMetrics(started(), snapshot);
+    expect(state.metrics).toBe(snapshot);
+  });
+
+  it("opens and closes the fixture detail pane", () => {
+    const detail = {
+      evaluationId: "alpha::high",
+      modelAlias: "alpha",
+      reasoningMode: "high" as const,
+      fixtureId: "0",
+      category: "math",
+      question: "Question 0?",
+      state: "settled" as const,
+      kind: "incorrect" as const,
+      parsedAnswer: "B",
+      expectedAnswer: "A",
+      responseText: "B",
+      indeterminate: false,
+      failure: null,
+      lineage: { sourceRunId: null, sourceOutcomeId: null },
+      retryAtMs: null,
+      attempts: [],
+    };
+
+    expect(applyDetail(started(), detail).detail).toBe(detail);
+    expect(applyDetail(started(), detail).detail).not.toBeNull();
+    expect(applyDetail(applyDetail(started(), detail), null).detail).toBeNull();
+  });
+
+  it("filters activity by kind, fixture, model, and failure text", () => {
+    let state = withEvaluation(started());
+    state = failedAttempt(state, "0");
+    state = settle(state, "1", "settled", "incorrect");
+    state = applyEngineEvent(state, event("engine.paused", {}));
+
+    expect(filterActivity(state.activity, "failure")).toHaveLength(1);
+    expect(filterActivity(state.activity, "alpha")).toHaveLength(2);
+    expect(filterActivity(state.activity, "fixture 1")).toHaveLength(1);
+    expect(filterActivity(state.activity, "network")).toHaveLength(1);
+    expect(filterActivity(state.activity, "")).toHaveLength(state.activity.length);
+
+    const selected = selectedActivityEntry(state, "failure", 0);
+    expect(selected).toMatchObject({ kind: "failure", fixtureId: "0" });
+    expect(selectedActivityEntry(state, "failure", 9)).toBeNull();
+  });
+
+  it("exposes metrics and detail through store methods", () => {
+    const store = new RunViewStore();
+    store.applyMetrics(metrics());
+    expect(store.getSnapshot().metrics?.provisional).toBe(true);
+    store.applyDetail(null);
+    expect(store.getSnapshot().detail).toBeNull();
   });
 });
 

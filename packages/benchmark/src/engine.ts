@@ -65,6 +65,18 @@ export interface EngineFixture {
   lineage?: RecoveryLineage;
 }
 
+/**
+ * Read-only fixture metadata for inspection UIs. The question text is part of
+ * the prompt the model received; the expected answer is kept local and is never
+ * sent upstream. Image bytes are intentionally excluded.
+ */
+export interface EngineFixtureDetail {
+  fixtureId: string;
+  category: string;
+  question: string;
+  expectedAnswer: string;
+}
+
 /** One provider submission. `apps/runner` binds `OpenRouterClient.chatCompletion`. */
 export type CompletionProvider = (
   payload: ChatCompletionRequestPayload,
@@ -154,6 +166,7 @@ export class BenchmarkEngine {
 
   private readonly groups: GroupState[] = [];
   private readonly groupByName = new Map<string, GroupState>();
+  private readonly fixtureById = new Map<string, EngineFixture>();
   private readonly allItems: WorkItem[] = [];
   private readonly activeGroups = new Set<string>();
   private readonly cooldownUntil = new Map<string, number>();
@@ -188,6 +201,7 @@ export class BenchmarkEngine {
       this.execution.maxRequestsPerMinute ?? Number.POSITIVE_INFINITY,
       () => this.clock.now(),
     );
+    for (const fixture of this.fixtures) this.fixtureById.set(fixture.fixtureId, fixture);
 
     for (const evaluation of this.evaluations) {
       let group = this.groupByName.get(evaluation.rateLimitGroup);
@@ -254,6 +268,18 @@ export class BenchmarkEngine {
   /** Snapshot of every evaluation record; safe to call while running. */
   getRecords(): EvaluationRecord[] {
     return this.buildEvaluationRecords();
+  }
+
+  /** Read-only fixture metadata for inspection UIs, or null when unplanned. */
+  getFixtureDetail(fixtureId: string): EngineFixtureDetail | null {
+    const fixture = this.fixtureById.get(fixtureId);
+    if (fixture === undefined) return null;
+    return {
+      fixtureId: fixture.fixtureId,
+      category: fixture.category,
+      question: fixture.prompt.question,
+      expectedAnswer: fixture.expectedAnswer,
+    };
   }
 
   getMetrics(): EngineMetrics {
@@ -454,6 +480,7 @@ export class BenchmarkEngine {
         cost: result.value.cost,
         modelUsed: attempt.modelUsed,
         upstreamProvider: attempt.upstreamProvider,
+        retryAt: null,
       });
       const score = this.scorer.score({
         responseText: result.value.responseText,
@@ -474,6 +501,22 @@ export class BenchmarkEngine {
     const failure = result.failure;
     attempt.failure = failure;
     attempt.state = attemptStateForFailure(failure);
+
+    // Decide the retry before emitting so the event can advertise the scheduled
+    // retry time. A retryable failure that will not be retried (because the
+    // engine is stopping, or because it is a permanent auth/config failure)
+    // must not show a countdown that never happens.
+    const retrying =
+      !this.stopping &&
+      failure.category !== "cancelled" &&
+      failure.category !== "auth" &&
+      failure.category !== "configuration" &&
+      shouldRetryAttempt(failure, attemptNumber, this.execution.maxRetries);
+    const retryDelayMs = retrying
+      ? computeRetryDelayMs({ attemptNumber, failure, random: this.random })
+      : null;
+    const retryAtMs = retryDelayMs === null ? null : finishedAtMs + retryDelayMs;
+
     this.emit({
       type: "attempt.finished",
       evaluationId: evaluation.evaluationId,
@@ -485,6 +528,7 @@ export class BenchmarkEngine {
       cost: { kind: "unknown", usd: null },
       modelUsed: null,
       upstreamProvider: null,
+      retryAt: retryAtMs === null ? null : this.iso(retryAtMs),
     });
 
     if (this.stopping || failure.category === "cancelled") {
@@ -510,10 +554,9 @@ export class BenchmarkEngine {
       this.halt(failure);
       return;
     }
-    if (shouldRetryAttempt(failure, attemptNumber, this.execution.maxRetries)) {
-      const delay = computeRetryDelayMs({ attemptNumber, failure, random: this.random });
+    if (retrying && retryDelayMs !== null && retryAtMs !== null) {
       if (failure.category === "rate_limit") {
-        const until = finishedAtMs + delay;
+        const until = retryAtMs;
         const existing = this.cooldownUntil.get(evaluation.rateLimitGroup) ?? 0;
         this.cooldownUntil.set(evaluation.rateLimitGroup, Math.max(existing, until));
         this.cooldownAnnounced.add(evaluation.rateLimitGroup);
@@ -525,7 +568,7 @@ export class BenchmarkEngine {
         });
       }
       item.nextAttemptNumber = attemptNumber + 1;
-      item.retryAtMs = finishedAtMs + delay;
+      item.retryAtMs = retryAtMs;
       return;
     }
 
