@@ -17,6 +17,8 @@ import type {
 export const RUN_MANIFEST_VERSION = 1;
 /** Per-model record file schema version. */
 export const MODEL_RECORD_VERSION = 1;
+/** Frozen provider capability snapshot schema version. */
+export const CAPABILITY_SNAPSHOT_VERSION = 1;
 
 export const RUN_KINDS = ["primary", "recovery", "restart"] as const;
 /** A restart is a fresh primary run; lineage still points at the run it restarted from. */
@@ -196,6 +198,42 @@ export interface RunLineage {
   recoveredFixtureIds: string[] | null;
 }
 
+/**
+ * Provider effort-selection metadata as reported by the models endpoint.
+ *
+ * `supportedEfforts` preserves the upstream distinction: an array is the
+ * declared effort set, `null` means the gateway accepted all effort values,
+ * `"no-effort-selection"` means a reasoning model whose metadata carries no
+ * `supported_efforts`, and `"non-reasoning"` means the model declares no
+ * reasoning object at all. Unknown capabilities must never be silently treated
+ * as supported.
+ */
+export interface ReasoningCapabilitySnapshot {
+  supportedEfforts: string[] | null | "no-effort-selection" | "non-reasoning";
+  /** Upstream `default_effort`; `"none"` means off by default. */
+  defaultEffort: string | null;
+  /** Default on/off state when reasoning is not explicitly requested. */
+  defaultEnabled: boolean | null;
+  supportsMaxTokens: boolean;
+  /** When true, the model rejects disabling reasoning. */
+  mandatory: boolean | null;
+}
+
+/**
+ * Fresh capability metadata captured during preflight and frozen with the plan.
+ * A run never guesses image or reasoning support from a model name.
+ */
+export interface ModelCapabilitySnapshot {
+  snapshotVersion: typeof CAPABILITY_SNAPSHOT_VERSION;
+  modelId: string;
+  /** ISO-8601 UTC timestamp of the metadata fetch. */
+  fetchedAt: string;
+  /** True when `architecture.input_modalities` includes `image`. */
+  imageInput: boolean;
+  inputModalities: string[];
+  reasoning: ReasoningCapabilitySnapshot;
+}
+
 export interface CodeRevision {
   /** Git revision recorded at run creation, or null when unavailable. */
   revision: string | null;
@@ -232,5 +270,7 @@ export interface RunManifest {
   code: CodeRevision;
   configuration: FrozenConfiguration;
   plan: EvaluationPlan;
+  /** One snapshot per distinct model in `plan.evaluations`, in first-seen order. */
+  capabilities: ModelCapabilitySnapshot[];
   lifecycle: RunLifecycle;
 }

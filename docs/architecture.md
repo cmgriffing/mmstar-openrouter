@@ -17,7 +17,7 @@ format. See the MMStar citation in `README.md`.
 | Runner | `apps/runner` | Bun + OpenTUI React | CLI commands (`validate`, `benchmark`, `resume`, `retry-failed`, `restart`, `export`), interactive TUI, headless/plain output |
 | Website | `apps/web` | Astro + React islands | Read-only comparisons and fixture drilldown over one immutable publication |
 | Config contracts | `packages/config` | Runtime-neutral TypeScript | Versioned JSON configuration and validation, generated editor schema, deterministic evaluation-plan expansion |
-| Benchmark contracts | `packages/benchmark` | Runtime-neutral TypeScript | MMStar TSV ingestion, prompt/scorer contracts, typed engine events, provider contracts, scheduling, metrics |
+| Benchmark contracts | `packages/benchmark` | Runtime-neutral TypeScript | MMStar TSV ingestion, prompt/scorer contracts, typed engine events, OpenRouter adapter (metadata preflight, requests, responses), scheduling, metrics |
 | Results contracts | `packages/results` | Runtime-neutral TypeScript | Versioned run/evaluation/outcome/attempt records, recovery lineage, publication queries |
 
 Planned flow:
@@ -50,8 +50,8 @@ ambient runtime globals out of shared code.
 
 Runtime-specific work lives in the apps:
 
-- `apps/runner` owns the OpenRouter transport, filesystem persistence, process locking,
-  the terminal renderer, and the CLI process surface.
+- `apps/runner` owns the OpenRouter transport (`fetchTransport`), filesystem persistence,
+  process locking, the terminal renderer, and the CLI process surface.
 - `apps/web` owns Astro adapters, deployment-platform loading code, and the browser UI.
 
 If a later chunk needs SQLite or filesystem access in a shared package, it must be an

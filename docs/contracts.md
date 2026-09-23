@@ -14,6 +14,7 @@ persisted or wire-facing structure carries an explicit version constant.
 | `SCORER_VERSION` | 1 | Scoring contract | `packages/benchmark` |
 | `RUN_MANIFEST_VERSION` | 1 | `manifest.json` | `packages/results` |
 | `MODEL_RECORD_VERSION` | 1 | Per-model JSON records | `packages/results` |
+| `CAPABILITY_SNAPSHOT_VERSION` | 1 | Frozen provider capability snapshot | `packages/results` |
 | `ENGINE_EVENT_VERSION` | 1 | Typed engine events | `packages/benchmark` |
 
 Package dependency direction is linear and enforced by imports: `@mmstar/config` →
@@ -64,6 +65,49 @@ declared reasoning-mode order; fixtures keep dataset order. It freezes:
 Duplicate evaluations — two aliases expanding to the same model, mode, and routing — are
 rejected, as are unknown sets, duplicate fixture IDs, and empty selections.
 
+## Provider adapter
+
+`packages/benchmark/src/provider-*.ts` owns the OpenRouter-facing contracts. The network
+transport is injected, so the same code runs under Bun, in tests, and in any future
+runtime; `apps/runner/src/transport.ts` is the only `fetch` implementation.
+
+- `OpenRouterClient` (`provider-client.ts`) sends `GET /models` and
+  `POST /chat/completions` through the injected `ProviderTransport`. It never reads
+  configuration: the caller passes the key from the environment via
+  `readOpenRouterApiKey`, and the key stays in outgoing headers — never in failures, raw
+  response retention, events, or records. A request timeout aborts the transport and is
+  classified as `timeout`; caller cancellation is classified as `cancelled`.
+- Metadata parsing (`provider-metadata.ts`) preserves the upstream distinctions:
+  `supported_efforts` array, `null` (all gateway efforts accepted),
+  `"no-effort-selection"` (reasoning object without the field), and `"non-reasoning"`
+  (no reasoning object). Catalog shapes the parser cannot interpret throw
+  `ProviderProtocolError` instead of being guessed at.
+- Preflight (`provider-preflight.ts`) fails closed: unknown models, models without
+  `image` input, and explicit efforts that metadata does not list are rejected as
+  actionable issues. `mandatory` reasoning rejects `none`. `default` always omits the
+  upstream `reasoning` parameter; `none` on a non-reasoning model also omits it, while a
+  reasoning model without effort selection still receives the explicit
+  `{ effort: "none" }` so `none` never silently becomes `default`. One snapshot per
+  distinct model is returned for freezing in the manifest.
+- Requests (`provider-request.ts`) carry one user message with the versioned instruction
+  plus the question verbatim and the image as a `data:` URL. The expected answer is never
+  part of the payload. Dynamic routers (`openrouter/auto`, `openrouter/free`) and
+  `:variant` suffixes are rejected again at this boundary. Provider routing maps to
+  `only`, `order`, `ignore`, `allow_fallbacks`, and `sort`, with
+  `require_parameters: true` always set.
+- Responses (`provider-response.ts`) normalize the reported model, the serving provider
+  (from `openrouter_metadata.endpoints.selected` or the legacy `provider` field),
+  `finish_reason`, visible text, nullable token usage (including
+  `completion_tokens_details.reasoning_tokens`), and reported cost. Missing or malformed
+  fields become `null`/`unknown`, never zero. The parsed body is returned so chunk 5 can
+  retain it for local audit.
+- Failures (`provider-failure.ts`) map HTTP statuses to the durable categories: 401/403
+  `auth`, 402/404 `configuration`, 408 `timeout`, 429 `rate_limit`, 400/other 4xx
+  `invalid_request`, 499 `cancelled`, 5xx `server_error`, and malformed success bodies
+  `unknown`. `isRetryableFailure` allows only timeouts, network failures, 429, and
+  selected 5xx (500, 502–504, 507, 508, 520–525, 527, 530); 501/505 are recorded but not
+  retried. `Retry-After` (delta-seconds or HTTP-date) is preserved as `retryAfterMs`.
+
 ## Run records
 
 `packages/results/src/records.ts` defines the durable JSON shapes. Key rules:
@@ -72,6 +116,10 @@ rejected, as are unknown sets, duplicate fixture IDs, and empty selections.
   `recovery`, or `restart`, with `parentRunId` and (for recovery) `recoveredFixtureIds`.
 - `ModelRecordFile` holds one alias's `EvaluationRecord[]`, each with `outcomes` and
   `attempts`. Outcomes and attempts have stable unique IDs.
+- `RunManifest.capabilities` holds one versioned `ModelCapabilitySnapshot` per distinct
+  model in `plan.evaluations`, in first-seen order: input modalities, image support, and
+  the raw reasoning metadata. It is the frozen evidence preflight used, so a later
+  capability change cannot silently reinterpret a run.
 - `OutcomeRecord.state` is `pending`, `settled`, `failed`, `indeterminate`, or `cancelled`;
   `kind` (`correct`, `incorrect`, `ambiguous`, `invalid`, `refused`, `truncated`) is only set
   for settled outcomes. Request failures are never scored kinds.
@@ -111,12 +159,29 @@ formats, unique IDs, and the frozen source hash. Test-only Node builtin declarat
 
 ## Current upstream references
 
-Captured while implementing chunk 2 (recheck before changing provider behavior in chunk 3+):
+Rechecked while implementing chunk 3 (2026-09-23). Recheck again before changing provider
+behavior:
 
-- Reasoning controls and effort values:
+- Reasoning controls and effort values (`max`, `xhigh`, `high`, `medium`, `low`,
+  `minimal`, `none`; `reasoning.enabled`, `reasoning.exclude`; legacy `include_reasoning`):
   <https://openrouter.ai/docs/guides/best-practices/reasoning-tokens>
-- Provider routing:
+- Metadata semantics: `supported_efforts` is descending order; `null` means all gateway
+  effort values are accepted; omitted means the model exposes no effort selection;
+  `default_effort: "none"` means reasoning is off by default; `default_enabled`,
+  `supports_max_tokens`, and `mandatory` (which rejects `effort: "none"`). Model metadata
+  comes from `GET /api/v1/models` and `architecture.input_modalities` includes `image`
+  for image-capable models:
+  <https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties>
+- Gateway effort mapping: OpenRouter documents that some providers map an unsupported
+  effort to the nearest supported level (for example Gemini 3 `thinkingLevel`). This
+  project still fails closed — an explicit mode must appear in `supported_efforts`, or
+  the field must be `null`, before it is sent, so a benchmark never depends on an
+  undocumented remap.
+- Provider routing (`order`, `only`, `ignore`, `allow_fallbacks`, `sort`, and
+  `require_parameters`) and routing metadata opt-in (`X-OpenRouter-Metadata: enabled`,
+  surfaced under `openrouter_metadata`):
   <https://openrouter.ai/docs/guides/routing/provider-selection>
-- Model metadata (`GET /api/v1/models`) exposes `reasoning.supported_efforts` (descending,
-  `null` = all accepted, omitted = no effort selection), `default_effort` (`"none"` = off by
-  default), `default_enabled`, `supports_max_tokens`, and `mandatory`.
+- Chat completions response shape (`choices[].message.content`, `finish_reason`,
+  `usage.prompt_tokens`, `usage.completion_tokens`, `usage.total_tokens`,
+  `usage.completion_tokens_details.reasoning_tokens`, `usage.cost`):
+  <https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion>

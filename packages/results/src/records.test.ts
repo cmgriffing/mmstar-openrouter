@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ModelRecordFile, RunManifest } from "./index";
 import {
   ATTEMPT_STATES,
+  CAPABILITY_SNAPSHOT_VERSION,
   COST_KINDS,
   FAILURE_CATEGORIES,
   MODEL_RECORD_VERSION,
@@ -48,6 +49,22 @@ const manifest: RunManifest = {
       },
     ],
   },
+  capabilities: [
+    {
+      snapshotVersion: CAPABILITY_SNAPSHOT_VERSION,
+      modelId: "vendor/a",
+      fetchedAt: "2026-09-23T00:00:00.000Z",
+      imageInput: true,
+      inputModalities: ["text", "image"],
+      reasoning: {
+        supportedEfforts: ["high", "medium", "low"],
+        defaultEffort: "medium",
+        defaultEnabled: true,
+        supportsMaxTokens: false,
+        mandatory: false,
+      },
+    },
+  ],
   lifecycle: { state: "running", updatedAt: "2026-09-23T00:00:00.000Z" },
 };
 
@@ -144,5 +161,19 @@ describe("run record contracts", () => {
     expect(ATTEMPT_STATES).toContain("submitted");
     expect(FAILURE_CATEGORIES).toContain("rate_limit");
     expect(COST_KINDS).toEqual(["reported", "estimated", "unknown"]);
+    expect(CAPABILITY_SNAPSHOT_VERSION).toBe(1);
+    expect(parsedCapability(manifest)).toEqual({
+      supportedEfforts: ["high", "medium", "low"],
+      mandatory: false,
+    });
   });
 });
+
+function parsedCapability(value: RunManifest): { supportedEfforts: unknown; mandatory: unknown } {
+  const snapshot = value.capabilities[0];
+  if (snapshot === undefined) throw new Error("manifest fixture is missing a capability snapshot");
+  return {
+    supportedEfforts: snapshot.reasoning.supportedEfforts,
+    mandatory: snapshot.reasoning.mandatory,
+  };
+}

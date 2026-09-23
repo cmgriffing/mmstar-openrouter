@@ -81,14 +81,28 @@ Modes map to OpenRouter's `reasoning.effort` (current gateway values: `max`, `xh
 | `none` | Explicitly request disabled reasoning. Invalid for models whose metadata marks reasoning as mandatory. |
 | `minimal` … `max` | Explicit effort level. |
 
-Preflight (chunk 3) validates each configured mode against fresh model metadata and fails
-closed for unknown explicit support instead of silently remapping effort. Metadata semantics
-observed during chunk 2:
+Preflight validates each configured mode against fresh model metadata before any request
+and fails closed for unknown explicit support instead of silently remapping effort:
 
-- `supported_efforts: null` means all gateway effort values are accepted;
-- an omitted `reasoning` object means the model does not expose effort selection;
-- `default_enabled`, `default_effort` (`"none"` means off by default), and `mandatory` decide
-  whether `default`/`none` are valid and what they mean.
+- `default` always omits the upstream `reasoning` parameter, even when reasoning is
+  mandatory. It is never the same request as `none`.
+- `none` is rejected when metadata marks reasoning `mandatory`. For a model with no
+  reasoning object the parameter is omitted (explicit disabling is a no-op); for any other
+  reasoning model it is sent as `effort: "none"`.
+- Explicit efforts require declared support: `supported_efforts` must list the mode, or be
+  `null` (all gateway effort values accepted). A `reasoning` object without
+  `supported_efforts` exposes no effort selection, so explicit modes are rejected.
+- A model that does not declare `image` in `architecture.input_modalities` is rejected
+  before any request, and so is a model absent from fresh metadata. Model IDs must appear
+  exactly in `GET /models`; a `~latest` alias that is not itself a catalog entry is
+  rejected rather than resolved by guesswork.
+
+Metadata semantics rechecked during chunk 3: `supported_efforts` is returned in descending
+effort order, `null` means all gateway efforts are accepted, `default_effort: "none"` means
+reasoning is off by default, and `mandatory: true` rejects `effort: "none"`. OpenRouter may
+itself map an unsupported effort to the nearest supported level for some providers; this
+project does not rely on that mapping — see `docs/contracts.md` for the upstream
+references.
 
 ## Credentials
 
