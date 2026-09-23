@@ -363,6 +363,46 @@ describe("BenchmarkEngine scheduling", () => {
   });
 });
 
+describe("BenchmarkEngine events", () => {
+  it("carries evaluation group/model and observed provider for live monitoring", async () => {
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a", "high")],
+      fixtures: [fixture("0")],
+      respond: () => ok("A"),
+    });
+
+    await h.run();
+
+    expect(h.events.find((event) => event.type === "evaluation.started")).toMatchObject({
+      evaluationId: "alpha::high",
+      modelAlias: "alpha",
+      openRouterId: "vendor/alpha",
+      reasoningMode: "high",
+      rateLimitGroup: "group-a",
+    });
+    expect(h.events.find((event) => event.type === "attempt.finished")).toMatchObject({
+      modelUsed: "vendor/x",
+      upstreamProvider: "provider-x",
+    });
+  });
+
+  it("reports no observed provider when an attempt never reached a provider", async () => {
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a")],
+      fixtures: [fixture("0")],
+      respond: () => fail("timeout"),
+    });
+
+    await h.run();
+
+    const finished = h.events.filter((event) => event.type === "attempt.finished");
+    expect(finished.length).toBeGreaterThan(0);
+    for (const event of finished) {
+      expect(event).toMatchObject({ modelUsed: null, upstreamProvider: null });
+    }
+  });
+});
+
 describe("BenchmarkEngine retries and outcomes", () => {
   it("retries transient failures with jittered backoff up to the attempt ceiling", async () => {
     const h = harness({

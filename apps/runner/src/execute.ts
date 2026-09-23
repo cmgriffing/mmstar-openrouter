@@ -13,6 +13,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   BenchmarkEngine,
   type CompletionProvider,
+  type EngineEventSink,
   type EngineFixture,
   type EngineRunResult,
   type FixtureRecord,
@@ -77,6 +78,8 @@ export interface RunContext {
   suffix?: () => string;
   stderr: { write: (text: string) => void };
   emit: (payload: Record<string, unknown>) => void;
+  /** Optional typed engine-event subscriber for an interactive renderer. */
+  engineEvents?: EngineEventSink;
   revision?: () => Promise<{ revision: string | null; dirty: boolean }>;
   /** Injected provider for tests; defaults to a fail-closed stub. */
   provider?: CompletionProvider;
@@ -511,6 +514,7 @@ async function executeManifest(input: ExecuteManifestInput): Promise<CommandResu
     execution: manifest.configuration.execution,
     provider: context.provider ?? unavailableProvider,
     sink: (event) => {
+      context.engineEvents?.(event);
       context.emit({ event: "engine", runId: manifest.runId, ...event });
       if (event.type === "attempt.started" || event.type === "outcome.settled") {
         checkpoint(store, manifest, input, engine.getRecords());

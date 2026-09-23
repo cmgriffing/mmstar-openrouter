@@ -399,7 +399,9 @@ export class BenchmarkEngine {
         type: "evaluation.started",
         evaluationId: evaluation.evaluationId,
         modelAlias: evaluation.modelAlias,
+        openRouterId: evaluation.openRouterId,
         reasoningMode: evaluation.reasoningMode,
+        rateLimitGroup: evaluation.rateLimitGroup,
       });
     }
 
@@ -450,6 +452,8 @@ export class BenchmarkEngine {
         failure: null,
         usage: result.value.usage,
         cost: result.value.cost,
+        modelUsed: attempt.modelUsed,
+        upstreamProvider: attempt.upstreamProvider,
       });
       const score = this.scorer.score({
         responseText: result.value.responseText,
@@ -479,6 +483,8 @@ export class BenchmarkEngine {
       failure,
       usage: null,
       cost: { kind: "unknown", usd: null },
+      modelUsed: null,
+      upstreamProvider: null,
     });
 
     if (this.stopping || failure.category === "cancelled") {

@@ -91,7 +91,9 @@ engine can drive the TUI, plain output, or tests. Rate-limit groups serialize va
 a global group cap plus an optional account-wide requests-per-minute cap bound traffic,
 classified transient failures retry with jittered backoff, and every attempt is recorded
 before submission and after completion. Durable persistence and recovery commands are
-wired in chunk 5; the TUI in chunks 6–7 consumes the typed events.
+wired in chunk 5; the interactive TUI consumes the same typed events through
+`RunContext.engineEvents` and a bounded, renderer-independent view store
+(`apps/runner/src/tui/state.ts`), with controls wired in chunk 7.
 
 ## Results and publication model
 

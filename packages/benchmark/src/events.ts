@@ -40,7 +40,9 @@ export type EngineEvent =
       type: "evaluation.started";
       evaluationId: string;
       modelAlias: string;
+      openRouterId: string;
       reasoningMode: ReasoningMode;
+      rateLimitGroup: string;
     })
   | (EngineEventBase & {
       type: "attempt.started";
@@ -57,6 +59,10 @@ export type EngineEvent =
       failure: FailureRecord | null;
       usage: UsageRecord | null;
       cost: CostRecord;
+      /** Model reported by the provider response; null when no response arrived. */
+      modelUsed: string | null;
+      /** Upstream provider that served the response; null when unknown. */
+      upstreamProvider: string | null;
     })
   | (EngineEventBase & {
       type: "outcome.settled";

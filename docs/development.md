@@ -55,9 +55,16 @@ as `false`.
 The interactive TUI runs from source:
 
 ```bash
-pnpm --filter @mmstar/runner dev          # normal interactive start
+pnpm --filter @mmstar/runner dev          # interactive monitor for a runner command
+pnpm --filter @mmstar/runner dev -- benchmark --set smoke
+pnpm --filter @mmstar/runner demo         # deterministic mock run, no credentials
 pnpm --filter @mmstar/runner smoke        # render briefly, then exit (PTY check)
 ```
+
+TUI behavior is covered by Vitest (pure view-state, formatting, and line builders)
+plus Bun-native frame tests that drive OpenTUI's test renderer;
+`pnpm --filter @mmstar/runner test` runs both suites. The demo command never makes a
+network request, so PTY checks work without `OPENROUTER_API_KEY`.
 
 `OPENROUTER_API_KEY` is read from the environment by the runner only. It is declared as
 a Turbo pass-through variable and must never be written to configuration or artifacts.

@@ -22,6 +22,33 @@ mmstar <command> [options]
 Exit codes: `0` success, `1` runtime failure (invalid run, provider halt, incomplete
 work), `2` usage or validation error, `130` interrupted before completion.
 
+## Terminal UI
+
+`bun run src/index.tsx <command>` (or `pnpm --filter @mmstar/runner dev -- <command>`)
+runs the same commands as the plain CLI but renders typed engine events in an
+OpenTUI React screen instead of NDJSON: run identity, progress and an elapsed/remaining
+estimate, one row per model/effort with its rate-limit group, observed provider,
+attempts, and cooldown countdown, terminal outcome counts, and a bounded activity
+history.
+
+```bash
+pnpm --filter @mmstar/runner dev -- benchmark --set smoke
+pnpm --filter @mmstar/runner demo         # deterministic mock run, no credentials
+pnpm --filter @mmstar/runner smoke        # render briefly, then exit (PTY check)
+```
+
+Keyboard: `?` help, `↑/↓` move row focus, `Tab` switch pane, `PgUp/PgDn`/`Home`/`End`
+scroll activity, `q` quit after the run settles. Statuses use text tokens (`[RUN]`,
+`[COOL]`, `[WAIT]`, `[DONE]`, `[FAIL]`) so they never depend on color; narrow
+terminals drop the provider prefix and shorten columns.
+
+`--demo` drives the real engine with a deterministic mock provider (scripted
+cooldown, retry, and permanent failure) and exits when the run finishes; `--hold`
+keeps the final frame until `q`. In this chunk the TUI is a monitor: a `q` during
+in-flight work is deferred until the run settles, and pause/resume plus non-TTY
+plain output arrive in the next chunk. The run ID and final state are printed after
+the terminal is restored.
+
 ## Run directory layout
 
 ```

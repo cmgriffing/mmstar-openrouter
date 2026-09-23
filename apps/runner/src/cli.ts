@@ -3,8 +3,8 @@
  * CLI entry point. Everything testable lives in `commands`, `flags`, `execute`,
  * and `validate`; this file only wires process streams, signals, and exit codes.
  */
-import { readOpenRouterApiKey } from "@mmstar/benchmark";
 import { formatCommandUsage, formatUsage, parseCommand } from "./commands";
+import { buildRunContext } from "./context";
 import { execute, type RunContext, requestFromArgs } from "./execute";
 import { flagsForCommand, parseFlags } from "./flags";
 import { executeValidate } from "./validate";
@@ -37,18 +37,7 @@ const emit = (payload: Record<string, unknown>): void => {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 };
 
-const resultsRoot = process.env.MMSTAR_RESULTS_ROOT ?? "results";
-
-const baseContext = (): RunContext => ({
-  resultsRoot,
-  cwd: process.cwd(),
-  configPath: process.env.MMSTAR_CONFIG ?? "mmstar.config.json",
-  apiKey: readOpenRouterApiKey(process.env),
-  skipPreflight: false,
-  force: false,
-  stderr: process.stderr,
-  emit,
-});
+const baseContext = (): RunContext => buildRunContext({ emit, stderr: process.stderr });
 
 if (command === "validate") {
   if (!helpCheck.ok) {
