@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build and tool output
+dist/
+.turbo/
+coverage/
+.astro/
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Benchmark outputs and generated publication assets: the TSV is the single
+# committed image source; everything generated stays local.
+/results/
+/publication/
+benchmark-images/
+apps/web/public/publication/
+apps/web/public/benchmark-images/
+
+# Local ephemeral planning artifacts.
+/openspec/

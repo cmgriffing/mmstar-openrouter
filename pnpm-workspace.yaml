@@ -1,0 +1,22 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Central pins for toolchain and shared runtime dependencies. Reference these
+# from workspace packages with `"catalog:"` instead of repeating versions.
+catalog:
+  "@biomejs/biome": 2.5.14
+  "@types/bun": 1.4.2
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
+  react: 19.3.0
+  react-dom: 19.3.0
+  turbo: 2.11.3
+  typescript: 5.9.3
+  vitest: 5.0.1
+
+# pnpm 10 blocks dependency build scripts by default. Only allow the native
+# tooling this workspace actually needs.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

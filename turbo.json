@@ -1,0 +1,38 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalPassThroughEnv": ["OPENROUTER_API_KEY"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".astro/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "validate": {
+      "cache": false
+    },
+    "benchmark": {
+      "cache": false
+    },
+    "resume": {
+      "cache": false
+    },
+    "retry-failed": {
+      "cache": false
+    },
+    "restart": {
+      "cache": false
+    },
+    "export": {
+      "cache": false
+    }
+  }
+}

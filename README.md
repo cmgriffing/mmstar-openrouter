@@ -4,6 +4,21 @@ This repo is meant to be an implementation of the MMStar benchmarks that is set 
 
 The end goal is to have a verifiable set of data that can be used to make informed decisions about which models to use for various image understanding using cases and allow for the selection of cheaper or faster models with a good enough level of understanding.
 
+## Development
+
+Workspace documentation:
+
+- [`docs/architecture.md`](./docs/architecture.md) — components, runtime boundaries, and the results/publication model
+- [`docs/development.md`](./docs/development.md) — pinned toolchain, commands, conventions, and the bounded-session workflow
+
+Quick start:
+
+```bash
+pnpm install
+pnpm check
+pnpm build
+```
+
 ## License
 
 This implementation and code in this repo (besides the dataset) is licensed under the [MIT License](./LICENSE).

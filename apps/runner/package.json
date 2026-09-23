@@ -1,0 +1,34 @@
+{
+  "name": "@mmstar/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "smoke": "bun run src/index.tsx --smoke",
+    "build": "bun build ./src/cli.ts --target=bun --outdir=dist",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src",
+    "test": "vitest run",
+    "validate": "bun run src/cli.ts validate",
+    "benchmark": "bun run src/cli.ts benchmark",
+    "resume": "bun run src/cli.ts resume",
+    "retry-failed": "bun run src/cli.ts retry-failed",
+    "restart": "bun run src/cli.ts restart",
+    "export": "bun run src/cli.ts export"
+  },
+  "dependencies": {
+    "@mmstar/benchmark": "workspace:*",
+    "@mmstar/config": "workspace:*",
+    "@mmstar/results": "workspace:*",
+    "@opentui/core": "0.5.12",
+    "@opentui/react": "0.5.12",
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/react": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
