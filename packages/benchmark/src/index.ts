@@ -1,5 +1,7 @@
 export * from "./dataset";
+export * from "./engine";
 export * from "./events";
+export * from "./metrics";
 export * from "./prompt";
 export * from "./provider-client";
 export * from "./provider-failure";
@@ -7,4 +9,6 @@ export * from "./provider-metadata";
 export * from "./provider-preflight";
 export * from "./provider-request";
 export * from "./provider-response";
+export * from "./rate-limiter";
+export * from "./retry-policy";
 export * from "./scorer";

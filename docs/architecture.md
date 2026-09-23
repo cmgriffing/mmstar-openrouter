@@ -82,6 +82,17 @@ that can contact a provider or write benchmark artifacts — `validate`, `benchm
 a pass-through environment variable; credentials never appear in configuration files or
 run artifacts.
 
+## Execution model
+
+`packages/benchmark` owns a headless engine (`engine.ts`) that turns a frozen plan and
+fixture list into scheduled provider requests. It is deliberately independent of the
+terminal: injected clock, provider, jitter source, scorer, and event sink mean the same
+engine can drive the TUI, plain output, or tests. Rate-limit groups serialize variants,
+a global group cap plus an optional account-wide requests-per-minute cap bound traffic,
+classified transient failures retry with jittered backoff, and every attempt is recorded
+before submission and after completion. Durable persistence and recovery commands are
+wired in chunk 5; the TUI in chunks 6–7 consumes the typed events.
+
 ## Results and publication model
 
 Benchmark runs write immutable JSON under `results/` (timestamped run directory, frozen

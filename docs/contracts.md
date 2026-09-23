@@ -143,6 +143,42 @@ never raw response text — so event batching and bounded UI history cannot be i
 provider output. Rendering consumes events; scheduling and persistence never depend on a
 renderer.
 
+## Execution engine
+
+`packages/benchmark/src/engine.ts` is the headless scheduler. Clock, provider, jitter
+source, scorer, and event sink are injected, so scheduling is tested without a network or
+a terminal.
+
+- **Groups.** Every evaluation belongs to one `rateLimitGroup`. Work items
+  (evaluation × fixture) queue per group in plan/fixture order; at most one request is in
+  flight per group across models and effort variants. Groups run round-robin under
+  `maxConcurrentGroups`, and `maxRequestsPerMinute` applies a sliding one-minute
+  account-wide request cap with its own cooldown event (`reason: "request_cap"`).
+  Pause stops new launches while in-flight work settles; resume continues; stop aborts
+  in-flight requests (recorded `cancelled`) and leaves never-started work `pending`.
+- **Retries.** Only `isRetryableFailure` failures retry, up to `maxRetries` after the
+  initial attempt (`maxRetries: 3` allows at most four attempts). Delays are jittered
+  exponential backoff in `[250 ms, min(30 s, 1 s · 2^(attempt-1))]`; a `Retry-After`
+  value is honored exactly, including zero. A 429 also starts a shared group cooldown.
+  Scored responses — including `incorrect`, `ambiguous`, `invalid`, `refused`, and
+  `truncated` — are terminal and never retried.
+- **Permanent failures.** `auth` and `configuration` failures record a failed outcome and
+  halt new scheduling for the whole run (`EngineRunResult.halt` carries the failure);
+  in-flight requests settle normally. Other permanent failures (`invalid_request`,
+  `content_filter`, `unknown`) fail that fixture and scheduling continues.
+- **Unknown completion.** Exhausted `timeout`/`network` attempts settle as
+  `indeterminate` with `indeterminate: true`, never silently `failed`.
+- **Scoring.** `createOptionScorer()` accepts exactly one distinct uppercase option
+  letter among A–D, tolerating markdown emphasis, punctuation, and answer prose. Lowercase
+  answers, prose without an option, refusals, `finish_reason: "length"`, and
+  `finish_reason: "content_filter"` become `invalid`, `refused`, or `truncated`. The
+  expected answer is compared locally and never enters a request.
+- **Metrics.** `computeEngineMetrics()` reports coverage, total-selected accuracy
+  (`correct / selected`), scored-response accuracy (`correct / (correct + incorrect)`),
+  per-category denominators, attempt-level token totals and known/estimated/unknown
+  costs, and nearest-rank latency distributions for request latency and total fixture
+  time. Missing values stay `null`, and snapshots are `provisional` until the run ends.
+
 ## Verification
 
 ```bash
