@@ -1,22 +1,501 @@
 ---
-import ScaffoldStatus from "../components/ScaffoldStatus";
+import type {
+  CategoryComparison,
+  EvaluationComparison,
+  PublicationMeta,
+  RunSummary,
+} from "@mmstar/results";
+import Base from "../layouts/Base.astro";
+import {
+  formatCount,
+  formatDateTime,
+  formatFraction,
+  formatLatency,
+  formatPercent,
+  formatTokens,
+  formatTokensExact,
+  shortHash,
+} from "../lib/format";
+import {
+  categoryCell,
+  categoryMatrix,
+  comparisonCost,
+  evaluationLabel,
+  familySettingIssues,
+  isIncomplete,
+  runKindLabel,
+  sortComparisons,
+} from "../lib/view";
+import {
+  getPublicationRepository,
+  PublicationUnavailableError,
+  resolveRootRunId,
+} from "../server/publication";
+
+export const prerender = false;
+
+interface Model {
+  rootRunId: string;
+  runs: RunSummary[];
+  allRuns: RunSummary[];
+  comparisons: EvaluationComparison[];
+  categories: CategoryComparison[];
+  meta: PublicationMeta;
+}
+
+let model: Model | null = null;
+let loadError: string | null = null;
+
+try {
+  const repository = await getPublicationRepository({ request: Astro.request });
+  const requested = Astro.url.searchParams.get("rootRunId") ?? undefined;
+  const rootRunId = resolveRootRunId(repository, requested);
+  model = {
+    rootRunId,
+    runs: repository.listRuns(rootRunId),
+    allRuns: repository.listRuns(),
+    comparisons: repository.listComparisons(rootRunId),
+    categories: repository.listCategories({ rootRunId }),
+    meta: repository.meta(),
+  };
+} catch (error) {
+  model = null;
+  loadError =
+    error instanceof PublicationUnavailableError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : String(error);
+}
+
+const runs = model?.runs ?? [];
+const comparisons = sortComparisons(model?.comparisons ?? []);
+const allRoots = (model?.allRuns ?? []).filter((run) => run.isRoot);
+const issues = familySettingIssues(runs);
+const incompleteRuns = runs.filter((run) => run.lifecycleState !== "completed");
+const matrix = categoryMatrix(model?.categories ?? []);
+
+const totalSettled = comparisons.reduce((sum, row) => sum + row.settled, 0);
+const totalSelected = comparisons.reduce((sum, row) => sum + row.selected, 0);
+const familyCoverage = totalSelected > 0 ? totalSettled / totalSelected : null;
+const setName = runs[0]?.setName ?? "—";
+const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount ?? null;
+
+interface OutcomeChip {
+  label: string;
+  symbol: string;
+  tone: "good" | "bad" | "warn" | "neutral";
+  count: number;
+}
+
+function outcomeChips(row: EvaluationComparison): OutcomeChip[] {
+  return (
+    [
+      { label: "Correct", symbol: "✓", tone: "good" as const, count: row.correct },
+      { label: "Incorrect", symbol: "×", tone: "bad" as const, count: row.incorrect },
+      { label: "Ambiguous", symbol: "≈", tone: "warn" as const, count: row.ambiguous },
+      { label: "Invalid", symbol: "!", tone: "warn" as const, count: row.invalid },
+      { label: "Refused", symbol: "⊘", tone: "warn" as const, count: row.refused },
+      { label: "Truncated", symbol: "…", tone: "warn" as const, count: row.truncated },
+      { label: "Pending", symbol: "·", tone: "neutral" as const, count: row.pending },
+      { label: "Failed", symbol: "✗", tone: "bad" as const, count: row.failed },
+      { label: "Indeterminate", symbol: "?", tone: "warn" as const, count: row.indeterminate },
+      { label: "Cancelled", symbol: "—", tone: "neutral" as const, count: row.cancelled },
+    ] satisfies OutcomeChip[]
+  ).filter((chip) => chip.count > 0);
+}
+
+function unresolvedSummary(row: EvaluationComparison): string {
+  const parts: string[] = [];
+  if (row.pending > 0) parts.push(`${formatCount(row.pending)} pending`);
+  if (row.failed > 0) parts.push(`${formatCount(row.failed)} failed`);
+  if (row.indeterminate > 0) parts.push(`${formatCount(row.indeterminate)} indeterminate`);
+  if (row.cancelled > 0) parts.push(`${formatCount(row.cancelled)} cancelled`);
+  return parts.join(" · ");
+}
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MMStar · OpenRouter</title>
-  </head>
-  <body>
-    <main>
-      <h1>MMStar · OpenRouter</h1>
-      <p>
-        Immutable benchmark publications will be served from this site. Query endpoints,
-        comparisons, and fixture drilldown land in later implementation chunks.
-      </p>
-      <ScaffoldStatus client:load />
-    </main>
-  </body>
-</html>
+<Base
+  title="Comparisons · MMStar · OpenRouter"
+  rootRunId={model?.rootRunId}
+  headerMeta={model === null ? undefined : `root run ${shortHash(model.rootRunId)} · exported ${formatDateTime(model.meta.createdAt)}`}
+>
+  {
+    model === null ? (
+      <section class="empty-panel" role="alert">
+        <h1>Publication unavailable</h1>
+        <p class="mono">{loadError}</p>
+        <p>
+          Export a run with <code>mmstar export</code>, then sync it into the website assets
+          (<code>node scripts/sync-publication.mjs</code>) or deploy a build that includes a
+          publication.
+        </p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="kicker">01 · Publication</p>
+          <h1 class="hero-title">
+            Image understanding, <em>measured</em>.
+          </h1>
+          <p class="hero-sub">
+            MMStar fixtures executed through OpenRouter, published as one immutable snapshot.
+            Accuracy is scored against the dataset answer; latency and cost come from the actual
+            attempts, and unknown values stay unknown.
+          </p>
+          <dl class="stat-strip">
+            <div>
+              <dt>Set</dt>
+              <dd>{setName}</dd>
+            </div>
+            <div>
+              <dt>Evaluations</dt>
+              <dd>{formatCount(comparisons.length)}</dd>
+            </div>
+            <div>
+              <dt>Fixtures / evaluation</dt>
+              <dd>{formatCount(fixturesPerEvaluation)}</dd>
+            </div>
+            <div>
+              <dt>Family coverage</dt>
+              <dd>{formatPercent(familyCoverage)}</dd>
+            </div>
+            <div>
+              <dt>Exported</dt>
+              <dd>{formatDateTime(model.meta.createdAt)}</dd>
+            </div>
+          </dl>
+          {allRoots.length > 1 && (
+            <nav class="run-selector" aria-label="Run families">
+              <span class="kicker">Family</span>
+              {allRoots.map((run) => (
+                <a
+                  href={`/?rootRunId=${encodeURIComponent(run.runId)}`}
+                  aria-current={run.runId === model?.rootRunId ? "true" : undefined}
+                  title={run.runId}
+                >
+                  {shortHash(run.runId, 18)} · {runKindLabel(run.runKind)}
+                </a>
+              ))}
+            </nav>
+          )}
+        </section>
+
+        {issues.length > 0 && (
+          <section class="notice" role="alert">
+            <h3>Mixed experiment settings</h3>
+            <p>
+              This family's runs do not share the same frozen settings, so aggregated comparisons
+              are not like-for-like.
+            </p>
+            <ul>
+              {issues.map((issue) => (
+                <li>
+                  {issue.field}: {issue.values.join(" vs ")}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {incompleteRuns.length > 0 && (
+          <section class="notice" role="alert">
+            <h3>Runs still incomplete</h3>
+            <p>
+              Results below include effective outcomes from every run in the family; runs that never
+              reached a completed state are listed with their lifecycle state.
+            </p>
+            <ul>
+              {incompleteRuns.map((run) => (
+                <li>
+                  {shortHash(run.runId, 24)} · {runKindLabel(run.runKind)} · {run.lifecycleState}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <p class="kicker">02 · Comparisons</p>
+              <h2>Model × effort</h2>
+            </div>
+            <p class="kicker">{formatCount(comparisons.length)} evaluations</p>
+          </div>
+          {comparisons.length === 0 ? (
+            <div class="empty-panel">
+              <h2>No evaluations in this family</h2>
+              <p>The publication contains runs but no evaluation records to compare.</p>
+            </div>
+          ) : (
+            <div class="table-wrap" tabindex="0" role="region" aria-label="Model comparisons">
+              <table class="data-table comparison-table">
+                <caption>
+                  Family-wide effective outcomes; recovery results replace failures, never add a
+                  second fixture.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Model</th>
+                    <th scope="col">Effort</th>
+                    <th scope="col">Router / group</th>
+                    <th scope="col">Scored accuracy</th>
+                    <th scope="col">Coverage</th>
+                    <th scope="col">Outcomes</th>
+                    <th scope="col">Latency</th>
+                    <th scope="col">Tokens</th>
+                    <th scope="col">Cost</th>
+                    <th scope="col" class="num">
+                      Attempts
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparisons.map((row) => {
+                    const cost = comparisonCost(row);
+                    const chips = outcomeChips(row);
+                    const incomplete = isIncomplete(row);
+                    return (
+                      <tr class={incomplete ? "is-incomplete" : undefined}>
+                        <td data-label="Model">
+                          <span class="model-name">{row.modelAlias}</span>
+                          <span class="badge-row">
+                            {incomplete && (
+                              <span class="badge badge--warn" title={unresolvedSummary(row)}>
+                                ! incomplete
+                              </span>
+                            )}
+                          </span>
+                          <a
+                            class="figure-sub"
+                            href={`/fixtures?${new URLSearchParams({
+                              rootRunId: model?.rootRunId ?? "",
+                              evaluationId: row.evaluationId,
+                            }).toString()}`}
+                          >
+                            inspect fixtures →
+                          </a>
+                        </td>
+                        <td data-label="Effort">
+                          <span class="mono">{row.reasoningMode}</span>
+                        </td>
+                        <td data-label="Router / group">
+                          <span class="mono">{row.openRouterId}</span>
+                          <span class="figure-sub">group {row.rateLimitGroup}</span>
+                        </td>
+                        <td data-label="Scored accuracy">
+                          <span class="figure">{formatPercent(row.scoredAccuracy)}</span>
+                          <span class="figure-sub">
+                            {formatFraction(row.correct, row.settled)} settled
+                          </span>
+                          <span class="figure-sub">
+                            {formatFraction(row.correct, row.selected)} selected
+                          </span>
+                        </td>
+                        <td data-label="Coverage">
+                          <span class="figure">{formatPercent(row.coverage)}</span>
+                          <span class="figure-sub">
+                            {formatFraction(row.settled, row.selected)} settled
+                          </span>
+                        </td>
+                        <td data-label="Outcomes">
+                          <span class="badge-row">
+                            {chips.map((chip) => (
+                              <span class={`badge badge--${chip.tone}`}>
+                                {chip.symbol} {formatCount(chip.count)}
+                              </span>
+                            ))}
+                          </span>
+                        </td>
+                        <td data-label="Latency">
+                          <span class="mono">{formatLatency(row.meanRequestLatencyMs)}</span>
+                          <span class="figure-sub">
+                            request · {formatLatency(row.meanTotalFixtureTimeMs)} fixture
+                          </span>
+                        </td>
+                        <td data-label="Tokens">
+                          {row.totalTokens === null ? (
+                            <>
+                              <span class="mono">not reported</span>
+                              <span class="figure-sub">
+                                {formatCount(row.usageUnknownCount)} without usage
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span class="mono" title={`${formatTokensExact(row.totalTokens)} total`}>
+                                {formatTokens(row.totalTokens)}
+                              </span>
+                              <span class="figure-sub">
+                                {formatTokens(row.promptTokens)} in · {formatTokens(row.completionTokens)}{" "}
+                                out
+                              </span>
+                            </>
+                          )}
+                        </td>
+                        <td data-label="Cost">
+                          <span class="mono">{cost.text}</span>
+                          {cost.detail !== null && <span class="figure-sub">{cost.detail}</span>}
+                        </td>
+                        <td data-label="Attempts" class="num">
+                          <span class="mono">{formatCount(row.attempts)}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p class="footnote">
+            Scored accuracy = correct / settled; selected accuracy = correct / selected; coverage =
+            settled / selected. Unknown cost counts attempts without a reported or estimated price.
+          </p>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <p class="kicker">03 · Categories</p>
+              <h2>Accuracy by category</h2>
+            </div>
+            <p class="kicker">{matrix.names.length} categories</p>
+          </div>
+          {matrix.names.length === 0 || comparisons.length === 0 ? (
+            <div class="empty-panel">
+              <h2>No category breakdown</h2>
+              <p>Category metrics appear once a run has effective outcomes.</p>
+            </div>
+          ) : (
+            <div class="table-wrap" tabindex="0" role="region" aria-label="Category accuracy">
+              <table class="data-table matrix-table">
+                <caption>Correct / settled within each category; "—" means nothing settled.</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Evaluation</th>
+                    {matrix.names.map((name) => (
+                      <th scope="col">
+                        {name}
+                      </th>
+                    ))}
+                    <th scope="col" class="num">
+                      Overall
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparisons.map((row) => (
+                    <tr>
+                      <th scope="row">{evaluationLabel(row)}</th>
+                      {matrix.names.map((name) => (
+                        <td>
+                          <span class="cell-figure">
+                            {categoryCell(matrix.byEvaluation.get(row.evaluationId)?.get(name))}
+                          </span>
+                        </td>
+                      ))}
+                      <td class="num matrix-overall">
+                        <span class="cell-figure">{formatPercent(row.scoredAccuracy)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <p class="kicker">04 · Lineage</p>
+              <h2>Runs in this family</h2>
+            </div>
+            <p class="kicker">newest first</p>
+          </div>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Run lineage">
+            <table class="data-table run-table">
+              <thead>
+                <tr>
+                  <th scope="col">Run</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">State</th>
+                  <th scope="col">Created</th>
+                  <th scope="col" class="num">
+                    Fixtures
+                  </th>
+                  <th scope="col" class="num">
+                    Recovered
+                  </th>
+                  <th scope="col">Prompt / scorer</th>
+                  <th scope="col">Dataset</th>
+                  <th scope="col">Build</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr>
+                    <td data-label="Run">
+                      <span class="mono" title={run.runId}>
+                        {shortHash(run.runId, 22)}
+                      </span>
+                      {run.parentRunId !== null && (
+                        <span class="figure-sub" title={run.parentRunId}>
+                          parent {shortHash(run.parentRunId, 18)}
+                        </span>
+                      )}
+                    </td>
+                    <td data-label="Role">
+                      <span
+                        class={`badge ${run.runKind === "primary" ? "badge--neutral" : "badge--accent"}`}
+                      >
+                        {runKindLabel(run.runKind)}
+                      </span>
+                    </td>
+                    <td data-label="State">
+                      <span
+                        class={`badge ${run.lifecycleState === "completed" ? "badge--good" : "badge--warn"}`}
+                      >
+                        {run.lifecycleState}
+                      </span>
+                    </td>
+                    <td data-label="Created">
+                      <span class="mono">{formatDateTime(run.createdAt)}</span>
+                    </td>
+                    <td data-label="Fixtures" class="num">
+                      <span class="mono">{formatCount(run.fixtureCount)}</span>
+                    </td>
+                    <td data-label="Recovered" class="num">
+                      <span class="mono">{formatCount(run.recoveredFixtureCount)}</span>
+                    </td>
+                    <td data-label="Prompt / scorer">
+                      <span class="mono">
+                        v{run.promptVersion} / v{run.scorerVersion}
+                      </span>
+                    </td>
+                    <td data-label="Dataset">
+                      <span class="mono" title={run.datasetSha256}>
+                        {shortHash(run.datasetSha256)}
+                      </span>
+                    </td>
+                    <td data-label="Build">
+                      <span class={`badge ${run.codeDirty ? "badge--warn" : "badge--neutral"}`}>
+                        {run.codeDirty ? "dirty tree" : "clean"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class="footnote">
+            Schema v{model.meta.schemaVersion ?? "?"}, exporter v{model.meta.exporterVersion ?? "?"}.
+            Original records stay immutable; recovery children resolve into this family's effective
+            outcomes.
+          </p>
+        </section>
+      </>
+    )
+  }
+</Base>

@@ -14,12 +14,21 @@ apps/web/src/server/sqljs-driver.ts   sql.js (WASM SQLite) adapter over the Sqli
 apps/web/src/server/publication.ts    platform asset loading + cached repository
 apps/web/src/server/http.ts           JSON/error response helpers
 apps/web/src/pages/api/*.json.ts      read-only endpoints
+apps/web/src/layouts/Base.astro       site shell, fonts, navigation
+apps/web/src/styles/global.css        field-report design system
+apps/web/src/lib/format.ts            pure value formatting (unknown vs zero)
+apps/web/src/lib/view.ts              outcome labels, filters, query strings
+apps/web/src/components/FixtureExplorer.tsx  drilldown island (filters, pages, states)
+apps/web/src/pages/index.astro        server-rendered comparisons
+apps/web/src/pages/fixtures.astro     drilldown shell + island
+apps/web/src/pages/fixture.astro      fixture detail (image, lineage, attempts)
 apps/web/public/                      generated static assets (Git-ignored)
   publication/benchmark.sqlite        the published snapshot, served as an asset
   benchmark-images/<sha256>.<ext>     content-addressed originals
   sql-wasm.wasm                       WASM binary for Node-target readers
 scripts/sync-publication.mjs          copies the publication + WASM into public/ before dev/build
 scripts/postprocess-cloudflare.mjs    CompiledWasm module + rule for the Workers build
+scripts/seed-verification-publication.ts  deterministic UI fixture publication
 ```
 
 `pnpm dev` and `pnpm build` run the sync first. Without a publication the sync
@@ -48,6 +57,50 @@ before any SQL runs.
 Images are static assets: the `imagePath` returned by the API is a relative URL
 (`benchmark-images/<sha256>.<ext>`) served by the deployment host, never a Git
 raw URL and never fetched at request time.
+
+## Frontend
+
+Every page is server-rendered from the same read-only repository; interactive
+filtering hydrates on top of the rendered first page, so the site works without
+JavaScript and never opens a writable database.
+
+| Route | Behavior |
+| --- | --- |
+| `/` | Comparisons by model × effort (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost), a category accuracy matrix, and the family's lineage table. |
+| `/fixtures?rootRunId&evaluationId&category&state&kind&offset` | Paginated fixture drilldown (25 per page) over effective outcomes, with recovered/indeterminate badges; filtering re-queries `/api/fixtures.json` and keeps the URL shareable. |
+| `/fixture?rootRunId&evaluationId&fixtureId&back` | One fixture: original image, question, effective outcome, parsed/expected answer, response text, usage/cost, failure details, outcome lineage (effective vs superseded), and the attempt ledger. |
+
+Presentation rules:
+
+- Unknown usage/cost render as "not reported" (family cost also shows how many
+  attempts are unknown); a real zero stays `$0.00`/`0`.
+- Scored accuracy (correct/settled), selected accuracy (correct/selected),
+  coverage (settled/selected), and attempt counts are labelled separately.
+- Recovery never double-counts: lists and comparisons show one effective
+  outcome per evaluation/fixture; the detail page keeps the superseded original
+  visible and marks the effective record.
+- Incomplete evaluations carry an "incomplete" badge; runs that mix frozen
+  settings or never completed are called out above the comparisons.
+- Statuses always combine a symbol and a label, focus is always visible, and
+  tables become labelled cards on narrow screens.
+
+The React island is the only stateful frontend code. It owns filter/pagination
+state, calls the bounded endpoint, and exposes explicit loading, empty, and
+error states with retry; engine and persistence code never enters the browser
+bundle (types are imported with `import type` only).
+
+### Reproducing the UI states
+
+`apps/web/scripts/seed-verification-publication.ts` builds a small deterministic
+publication that exercises recovery lineage, request failures, indeterminate
+attempts, pending work, mixed frozen settings, and known/estimated/unknown
+costs. It is a UI fixture, not a validated export:
+
+```bash
+bun apps/web/scripts/seed-verification-publication.ts /tmp/mmstar-verification
+MMSTAR_PUBLICATION_DIR=/tmp/mmstar-verification pnpm --filter @mmstar/web build:node
+HOST=127.0.0.1 PORT=4602 node apps/web/dist/server/entry.mjs
+```
 
 ## Platform loading
 
@@ -113,3 +166,20 @@ Measured 2026-09-23 (macOS arm64, Node 24.16.0, Bun 1.4.2, workerd 1.20260923.1)
   this environment. Netlify, Vercel, and Cloudflare hosted query/image behavior
   still requires a real deploy and must not be described as verified until then.
   The release checklist in `docs/development.md` tracks this open item.
+
+Frontend behavior was checked in a real browser (agent-browser/Chromium) against
+the deterministic verification publication, 2026-09-24:
+
+- comparisons render both families, including the incomplete and mixed-settings
+  notices, with effective-outcome counts (a recovered failure counts once);
+- fixture filters (evaluation/category/state/kind) re-query the API, pagination
+  moves through pages with URL sync, empty results and aborted requests show the
+  empty/error panels, and Retry recovers;
+- a recovered fixture shows the failed original as superseded beside the
+  effective recovery outcome, and unknown attempt cost reads "not reported";
+- keyboard tab order covers every control with a visible focus outline, Enter
+  activates pagination, and the skip link targets `#main`;
+- at 420×900 the pages have no horizontal overflow, tables become labelled
+  cards, and the detail image stays inside the viewport;
+- images load from `benchmark-images/<sha>.png` (HTTP 200); no page errors,
+  console errors, or failing resources were recorded.

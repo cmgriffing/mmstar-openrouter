@@ -1,0 +1,71 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title?: string;
+  description?: string;
+  rootRunId?: string;
+  headerMeta?: string;
+  footerMeta?: string;
+}
+
+const {
+  title = "MMStar · OpenRouter",
+  description = "Read-only results publication for MMStar image-understanding benchmarks run through OpenRouter.",
+  rootRunId,
+  headerMeta,
+  footerMeta,
+} = Astro.props;
+
+const suffix = rootRunId === undefined ? "" : `?rootRunId=${encodeURIComponent(rootRunId)}`;
+const current = Astro.url.pathname;
+const links = [
+  { href: `/${suffix}`, label: "Comparisons", active: current === "/" },
+  {
+    href: `/fixtures${suffix}`,
+    label: "Fixtures",
+    active: current.startsWith("/fixtures") || current.startsWith("/fixture"),
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <a class="brand" href={`/${suffix}`}>MMStar <span>· OpenRouter</span></a>
+        <nav class="topnav" aria-label="Sections">
+          {
+            links.map((link) => (
+              <a href={link.href} aria-current={link.active ? "page" : undefined}>
+                {link.label}
+              </a>
+            ))
+          }
+        </nav>
+        {headerMeta !== undefined && <p class="topnav-meta">{headerMeta}</p>}
+      </div>
+    </header>
+    <main id="main" class="shell">
+      <slot />
+    </main>
+    <footer class="shell site-footer">
+      <span>{footerMeta ?? "Immutable publication · read-only"}</span>
+      <span>Generated assets are versioned by redeployment, never mutated in place.</span>
+    </footer>
+  </body>
+</html>

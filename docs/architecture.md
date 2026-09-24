@@ -123,11 +123,14 @@ that snapshot: fixed parameterized statements (comparisons, categories, paginate
 fixture drilldown, fixture detail), page bounds, and no arbitrary SQL. `apps/web` builds
 the same Astro codebase for Node, Netlify, Vercel, and Cloudflare Workers; platform code
 is confined to where the database and WASM assets come from (`apps/web/src/server/publication.ts`,
-with sql.js as the WASM reader on every target). Endpoint contracts, per-target
-build/deploy commands, and the measured runtime evidence are documented in
+with sql.js as the WASM reader on every target). The frontend is server-rendered with one
+React island for drilldown filtering: comparisons, category matrices, fixture lineage, and
+attempt ledgers stay read-only and show unknown usage/cost as unknown rather than zero.
+Endpoint contracts, frontend behavior, per-target build/deploy commands, the deterministic
+UI fixture publication, and the measured runtime evidence are documented in
 `docs/website.md` and `docs/adr/0001-web-sqlite-reader.md`. Hosted Netlify/Vercel/
 Cloudflare behavior stays explicitly unverified until a real deployment smoke check is
-recorded; the full comparison and drilldown UI lands in chunk 10.
+recorded.
 
 ## Planning and sessions
 

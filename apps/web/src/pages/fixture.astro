@@ -1,0 +1,399 @@
+---
+import type { FixtureDetail } from "@mmstar/results";
+import Base from "../layouts/Base.astro";
+import {
+  formatCount,
+  formatDateTime,
+  formatLatency,
+  formatTokens,
+  formatTokensExact,
+  shortHash,
+} from "../lib/format";
+import {
+  attemptCostLine,
+  outcomePresentation,
+  parseBackTarget,
+  recoveryLineage,
+} from "../lib/view";
+import {
+  getPublicationRepository,
+  PublicationUnavailableError,
+  resolveRootRunId,
+} from "../server/publication";
+
+export const prerender = false;
+
+const params = Astro.url.searchParams;
+const evaluationId = params.get("evaluationId") ?? "";
+const fixtureId = params.get("fixtureId") ?? "";
+const back = parseBackTarget(params.get("back"));
+
+let detail: FixtureDetail | null = null;
+let rootRunId: string | null = null;
+let loadError: string | null = null;
+const missingSelection = evaluationId === "" || fixtureId === "";
+
+if (!missingSelection) {
+  try {
+    const repository = await getPublicationRepository({ request: Astro.request });
+    rootRunId = resolveRootRunId(repository, params.get("rootRunId") ?? undefined);
+    detail = repository.getFixtureDetail({ rootRunId, evaluationId, fixtureId });
+  } catch (error) {
+    loadError =
+      error instanceof PublicationUnavailableError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+  }
+}
+
+const outcome = detail === null ? null : outcomePresentation(detail.state, detail.kind);
+const lineage = detail === null ? null : recoveryLineage(detail);
+const recovered = detail !== null && rootRunId !== null && detail.effectiveRunId !== rootRunId;
+const backHref =
+  back ?? (rootRunId === null ? "/fixtures" : `/fixtures?rootRunId=${encodeURIComponent(rootRunId)}`);
+---
+
+<Base
+  title={detail === null ? "Fixture · MMStar · OpenRouter" : `Fixture ${detail.fixtureId} · MMStar`}
+  rootRunId={rootRunId ?? undefined}
+  headerMeta={detail === null ? undefined : `evaluation ${detail.evaluationId}`}
+>
+  {
+    loadError !== null ? (
+      <section class="empty-panel" role="alert">
+        <h1>Publication unavailable</h1>
+        <p class="mono">{loadError}</p>
+      </section>
+    ) : missingSelection || detail === null ? (
+      <section class="empty-panel">
+        <h1>Fixture not found</h1>
+        <p>
+          {missingSelection
+            ? "This page needs evaluationId and fixtureId query parameters."
+            : `No fixture ${fixtureId} exists for evaluation ${evaluationId} in this publication.`}
+        </p>
+        <p>
+          <a href={backHref}>← Back to fixtures</a>
+        </p>
+      </section>
+    ) : (
+      <>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <a href={backHref}>← {back === null ? "All fixtures" : "Back to filtered fixtures"}</a>
+          <span> / </span>
+          <span>{detail.evaluationId}</span>
+          <span> / </span>
+          <span>fixture {detail.fixtureId}</span>
+        </nav>
+
+        <section class="detail-head">
+          <p class="kicker">01 · Fixture detail</p>
+          <h1>Fixture {detail.fixtureId}</h1>
+          <div class="detail-meta">
+            <span class={`badge badge--${outcome?.tone ?? "neutral"}`}>
+              {outcome?.symbol} {outcome?.label}
+            </span>
+            {recovered && <span class="badge badge--accent">↺ recovered</span>}
+            {detail.indeterminate && detail.state !== "indeterminate" && (
+              <span class="badge badge--warn">? indeterminate attempt</span>
+            )}
+            <span class="badge badge--neutral">{detail.category}</span>
+            <span class="badge badge--neutral">{detail.l2Category}</span>
+            <span class="badge badge--neutral">{detail.bench}</span>
+          </div>
+          {lineage !== null && <p class="figure-sub">{lineage}</p>}
+        </section>
+
+        <div class="detail-grid">
+          <figure class="figure-panel">
+            <img
+              src={`/${detail.imagePath}`}
+              alt={`Original MMStar image for fixture ${detail.fixtureId}`}
+              loading="eager"
+              decoding="async"
+            />
+            <figcaption class="figure-caption">
+              {detail.imageMediaType} · sha256 {detail.imageSha256}
+            </figcaption>
+          </figure>
+
+          <div>
+            <div class="response-block">
+              <h3>Question</h3>
+              <p>{detail.question}</p>
+            </div>
+
+            <dl class="answer-grid">
+              <div>
+                <dt>Expected answer</dt>
+                <dd>{detail.expectedAnswer}</dd>
+              </div>
+              <div>
+                <dt>Parsed answer</dt>
+                <dd>{detail.parsedAnswer ?? "—"}</dd>
+              </div>
+              <div>
+                <dt>Effective run</dt>
+                <dd title={detail.effectiveRunId}>{shortHash(detail.effectiveRunId, 14)}</dd>
+              </div>
+            </dl>
+
+            <div class="response-block">
+              <h3>Response</h3>
+              {detail.responseText === null ? (
+                <p class="response-text response-text--missing">
+                  No response was recorded for this outcome.
+                </p>
+              ) : (
+                <pre class="response-text">{detail.responseText}</pre>
+              )}
+              {detail.responseTruncated && (
+                <p class="figure-sub">The stored response was truncated when persisted.</p>
+              )}
+            </div>
+
+            {detail.failureCategory !== null && (
+              <section class="notice notice--error" role="alert">
+                <h3>Request failure</h3>
+                <p class="mono">
+                  {detail.failureCategory}
+                  {detail.failureHttpStatus !== null ? ` · HTTP ${detail.failureHttpStatus}` : ""}
+                  {detail.failureRetryAfterMs !== null
+                    ? ` · retry-after ${formatLatency(detail.failureRetryAfterMs)}`
+                    : ""}
+                </p>
+                {detail.failureMessage !== null && <p class="mono">{detail.failureMessage}</p>}
+              </section>
+            )}
+
+            <div class="response-block">
+              <h3>Usage &amp; cost</h3>
+              <dl class="answer-grid">
+                <div>
+                  <dt>Prompt tokens</dt>
+                  <dd>{detail.usageKnown ? formatTokens(detail.promptTokens) : "not reported"}</dd>
+                </div>
+                <div>
+                  <dt>Completion tokens</dt>
+                  <dd>
+                    {detail.usageKnown ? formatTokens(detail.completionTokens) : "not reported"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Reasoning tokens</dt>
+                  <dd>
+                    {detail.usageKnown ? formatTokens(detail.reasoningTokens) : "not reported"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Total tokens</dt>
+                  <dd>
+                    {detail.usageKnown ? (
+                      <span title={formatTokensExact(detail.totalTokens)}>
+                        {formatTokens(detail.totalTokens)}
+                      </span>
+                    ) : (
+                      "not reported"
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Cost</dt>
+                  <dd>{attemptCostLine(detail.costKind, detail.costUsd)}</dd>
+                </div>
+                <div>
+                  <dt>Request latency</dt>
+                  <dd>{formatLatency(detail.requestLatencyMs)}</dd>
+                </div>
+                <div>
+                  <dt>Total fixture time</dt>
+                  <dd>{formatLatency(detail.totalFixtureTimeMs)}</dd>
+                </div>
+                <div>
+                  <dt>Attempts</dt>
+                  <dd>{formatCount(detail.attemptCount)}</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <p class="kicker">02 · Outcome family</p>
+              <h2>Outcome lineage</h2>
+            </div>
+            <p class="kicker">{formatCount(detail.outcomes.length)} records</p>
+          </div>
+          {recovered && (
+            <p class="figure-sub">
+              The effective outcome comes from a recovery run. The original outcome stays visible
+              below and is not counted again in comparisons.
+            </p>
+          )}
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Outcome lineage">
+            <table class="data-table lineage-table">
+              <thead>
+                <tr>
+                  <th scope="col">Run</th>
+                  <th scope="col">Recorded</th>
+                  <th scope="col">Outcome</th>
+                  <th scope="col">Parsed</th>
+                  <th scope="col" class="num">
+                    Attempts
+                  </th>
+                  <th scope="col">Role</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.outcomes.map((line) => {
+                  const lineOutcome = outcomePresentation(line.state, line.kind);
+                  return (
+                    <tr>
+                      <td data-label="Run">
+                        <span class="mono" title={line.runId}>
+                          {shortHash(line.runId, 18)}
+                        </span>
+                        {line.runId === detail?.rootRunId && (
+                          <span class="figure-sub">family root</span>
+                        )}
+                      </td>
+                      <td data-label="Recorded">
+                        <span class="mono">{formatDateTime(line.runCreatedAt)}</span>
+                      </td>
+                      <td data-label="Outcome">
+                        <span class={`badge badge--${lineOutcome.tone}`}>
+                          {lineOutcome.symbol} {lineOutcome.label}
+                        </span>
+                      </td>
+                      <td data-label="Parsed">
+                        <span class="mono">{line.parsedAnswer ?? "—"}</span>
+                      </td>
+                      <td data-label="Attempts" class="num">
+                        <span class="mono">{formatCount(line.attemptCount)}</span>
+                      </td>
+                      <td data-label="Role">
+                        {line.isEffective ? (
+                          <span class="badge badge--good">✓ effective</span>
+                        ) : (
+                          <span class="badge badge--neutral">superseded</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <p class="kicker">03 · Attempts</p>
+              <h2>Attempt ledger</h2>
+            </div>
+            <p class="kicker">{formatCount(detail.attempts.length)} attempts</p>
+          </div>
+          {detail.attempts.length === 0 ? (
+            <div class="empty-panel">
+              <h2>No attempts recorded</h2>
+              <p>This outcome exists without a persisted attempt record.</p>
+            </div>
+          ) : (
+            <div class="table-wrap" tabindex="0" role="region" aria-label="Attempt ledger">
+              <table class="data-table attempts-table">
+                <thead>
+                  <tr>
+                    <th scope="col" class="num">
+                      #
+                    </th>
+                    <th scope="col">Run</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Started</th>
+                    <th scope="col">Finished</th>
+                    <th scope="col">Latency</th>
+                    <th scope="col">Tokens</th>
+                    <th scope="col">Cost</th>
+                    <th scope="col">Served by</th>
+                    <th scope="col">Failure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.attempts.map((attempt) => (
+                    <tr>
+                      <td data-label="#" class="num">
+                        <span class="mono">{attempt.attemptNumber}</span>
+                      </td>
+                      <td data-label="Run">
+                        <span class="mono" title={attempt.runId}>
+                          {shortHash(attempt.runId, 14)}
+                        </span>
+                      </td>
+                      <td data-label="State">
+                        <span class="mono">{attempt.state}</span>
+                      </td>
+                      <td data-label="Started">
+                        <span class="mono">{formatDateTime(attempt.startedAt)}</span>
+                        {attempt.submittedAt !== null && (
+                          <span class="figure-sub">
+                            submitted {formatDateTime(attempt.submittedAt)}
+                          </span>
+                        )}
+                      </td>
+                      <td data-label="Finished">
+                        <span class="mono">{formatDateTime(attempt.finishedAt)}</span>
+                      </td>
+                      <td data-label="Latency">
+                        <span class="mono">{formatLatency(attempt.requestLatencyMs)}</span>
+                      </td>
+                      <td data-label="Tokens">
+                        {attempt.usageKnown ? (
+                          <span
+                            class="mono"
+                            title={`${formatTokensExact(attempt.promptTokens)} in / ${formatTokensExact(attempt.completionTokens)} out`}
+                          >
+                            {formatTokens(attempt.totalTokens)}
+                          </span>
+                        ) : (
+                          <span class="mono">not reported</span>
+                        )}
+                      </td>
+                      <td data-label="Cost">
+                        <span class="mono">{attemptCostLine(attempt.costKind, attempt.costUsd)}</span>
+                      </td>
+                      <td data-label="Served by">
+                        <span class="mono">{attempt.upstreamProvider ?? "unknown"}</span>
+                        <span class="figure-sub" title={attempt.modelUsed ?? attempt.requestedModel}>
+                          {attempt.modelUsed ?? attempt.requestedModel}
+                        </span>
+                      </td>
+                      <td data-label="Failure">
+                        {attempt.failureCategory === null ? (
+                          <span class="faint">—</span>
+                        ) : (
+                          <>
+                            <span class="mono">{attempt.failureCategory}</span>
+                            {attempt.failureHttpStatus !== null && (
+                              <span class="figure-sub">HTTP {attempt.failureHttpStatus}</span>
+                            )}
+                            {attempt.failureMessage !== null && (
+                              <span class="figure-sub">{attempt.failureMessage}</span>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </>
+    )
+  }
+</Base>

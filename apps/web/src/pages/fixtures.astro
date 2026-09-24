@@ -1,0 +1,140 @@
+---
+import type { FixturePage, OutcomeKind, OutcomeState } from "@mmstar/results";
+import FixtureExplorer from "../components/FixtureExplorer";
+import Base from "../layouts/Base.astro";
+import { formatCount, formatDateTime, shortHash } from "../lib/format";
+import { FIXTURE_PAGE_SIZE, evaluationLabel, readFixtureFilters } from "../lib/view";
+import {
+  getPublicationRepository,
+  PublicationUnavailableError,
+  resolveRootRunId,
+} from "../server/publication";
+
+export const prerender = false;
+
+interface ExplorerModel {
+  rootRunId: string;
+  exports: string | null;
+  page: FixturePage;
+  initialFilters: {
+    evaluationId: string;
+    category: string;
+    state: "" | OutcomeState;
+    kind: "" | OutcomeKind;
+    offset: number;
+  };
+  evaluations: { evaluationId: string; label: string }[];
+  categories: string[];
+  invalid: string[];
+}
+
+let model: ExplorerModel | null = null;
+let loadError: string | null = null;
+
+try {
+  const repository = await getPublicationRepository({ request: Astro.request });
+  const requested = Astro.url.searchParams.get("rootRunId") ?? undefined;
+  const rootRunId = resolveRootRunId(repository, requested);
+  const comparisons = repository.listComparisons(rootRunId);
+  const categories = [
+    ...new Set(repository.listCategories({ rootRunId }).map((row) => row.category)),
+  ].sort((a, b) => a.localeCompare(b));
+  const { values, invalid } = readFixtureFilters(Astro.url.searchParams, {
+    evaluationIds: new Set(comparisons.map((row) => row.evaluationId)),
+    categories: new Set(categories),
+  });
+  const page = repository.listFixtures({
+    rootRunId,
+    ...values,
+    limit: FIXTURE_PAGE_SIZE,
+  });
+  model = {
+    rootRunId,
+    exports: formatDateTime(repository.meta().createdAt),
+    page,
+    initialFilters: {
+      evaluationId: values.evaluationId ?? "",
+      category: values.category ?? "",
+      state: values.state ?? "",
+      kind: values.kind ?? "",
+      offset: values.offset,
+    },
+    evaluations: comparisons.map((row) => ({
+      evaluationId: row.evaluationId,
+      label: evaluationLabel(row),
+    })),
+    categories,
+    invalid,
+  };
+} catch (error) {
+  model = null;
+  loadError =
+    error instanceof PublicationUnavailableError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : String(error);
+}
+---
+
+<Base
+  title="Fixtures · MMStar · OpenRouter"
+  rootRunId={model?.rootRunId}
+  headerMeta={model === null ? undefined : `root run ${shortHash(model.rootRunId)} · exported ${model.exports}`}
+>
+  {
+    model === null ? (
+      <section class="empty-panel" role="alert">
+        <h1>Publication unavailable</h1>
+        <p class="mono">{loadError}</p>
+        <p>
+          The drilldown queries an immutable SQLite publication. Export and sync one, or deploy a
+          build that includes it.
+        </p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="kicker">01 · Drilldown</p>
+          <h1 class="hero-title">
+            Every fixture, <em>accounted for</em>.
+          </h1>
+          <p class="hero-sub">
+            Effective outcomes across the run family — one row per evaluation and fixture, even when
+            a recovery run supplied the final answer. Filters re-query the bounded read API; nothing
+            is written back.
+          </p>
+        </section>
+
+        {model.invalid.length > 0 && (
+          <section class="notice" role="alert">
+            <h3>Ignored unknown filters</h3>
+            <p>
+              {model.invalid.join(", ")} did not match this publication, so the view fell back to all
+              fixtures.
+            </p>
+          </section>
+        )}
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <p class="kicker">02 · Results</p>
+              <h2>Fixture list</h2>
+            </div>
+            <p class="kicker">{formatCount(model.evaluations.length)} evaluations</p>
+          </div>
+          <FixtureExplorer
+            client:load
+            rootRunId={model.rootRunId}
+            pageSize={FIXTURE_PAGE_SIZE}
+            initialPage={model.page}
+            initialFilters={model.initialFilters}
+            evaluations={model.evaluations}
+            categories={model.categories}
+          />
+        </section>
+      </>
+    )
+  }
+</Base>
