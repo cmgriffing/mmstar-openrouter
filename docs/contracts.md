@@ -16,6 +16,9 @@ persisted or wire-facing structure carries an explicit version constant.
 | `MODEL_RECORD_VERSION` | 1 | Per-model JSON records | `packages/results` |
 | `CAPABILITY_SNAPSHOT_VERSION` | 1 | Frozen provider capability snapshot | `packages/results` |
 | `ENGINE_EVENT_VERSION` | 1 | Typed engine events | `packages/benchmark` |
+| `PUBLICATION_SCHEMA_VERSION` | 1 | SQLite publication tables/views | `packages/results` |
+| `EXPORTER_VERSION` | 1 | Publication projection/validation behavior | `packages/results` |
+| `PUBLICATION_MANIFEST_VERSION` | 1 | Publication `manifest.json` | `packages/results` |
 
 Package dependency direction is linear and enforced by imports: `@mmstar/config` →
 `@mmstar/results` → `@mmstar/benchmark`. Nothing imports in the reverse direction, so run
@@ -184,6 +187,36 @@ a terminal.
   per-category denominators, attempt-level token totals and known/estimated/unknown
   costs, and nearest-rank latency distributions for request latency and total fixture
   time. Missing values stay `null`, and snapshots are `provisional` until the run ends.
+
+## Publication
+
+`packages/results/src/publication/` turns durable run JSON into the deployable
+artifact described in `docs/publication.md`. Key contracts:
+
+- `schema.ts` owns the versioned DDL. Outcomes are keyed by
+  `(run_id, evaluation_id, fixture_id)` and attempts by `(run_id, attempt_id)`;
+  attempt IDs repeat across a lineage, so run scoping is part of the key.
+- `rows.ts` is the public projection and the only place the whitelist is decided:
+  responses are bounded at 20,000 characters (`response_truncated` flags it),
+  `rawResponseRef`, `configuration.source`, and raw audit content never leave, usage
+  and cost flatten with explicit `usage_known`/`cost_kind`, and each run gets a
+  canonical content fingerprint over its projected rows plus its source-file hash.
+- `write.ts` imports rows in one transaction. Importing the same run twice is a no-op
+  (fingerprint match); different content for an existing run/evaluation/fixture ID is
+  `PublicationConflictError`.
+- Views resolve the recovery story deterministically: `v_original_outcomes` is the
+  family's first run, `v_effective_outcomes` picks the newest scored outcome (or the
+  newest terminal outcome) per `(family, evaluation, fixture)`, and
+  `v_attempt_totals` keeps original+recovery attempt costs without double-counting
+  effective outcomes.
+- `images.ts` re-validates base64, magic-number/media-type agreement, and the 8 MB
+  bound, then writes one file per SHA-256 under `benchmark-images/<hash>.<ext>`.
+- `publish.ts` builds in a temp directory and only swaps it into place after
+  `verify.ts` rechecks the database hash/integrity/counts, run/root identity, and every
+  image hash and reference. A failed export preserves the previous artifact.
+- `driver.ts` is the runtime-neutral `SqliteDatabase` seam; `sqlite-node.ts` adapts
+  `node:sqlite`, which runs under both Node and Bun. Chunk 9 supplies WASM adapters
+  behind the same interface for deployment targets.
 
 ## Verification
 

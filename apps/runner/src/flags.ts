@@ -64,6 +64,27 @@ export const SELECTOR_FLAGS: readonly FlagSpec[] = [
   },
 ];
 
+export const EXPORT_FLAGS: readonly FlagSpec[] = [
+  { name: "help", aliases: ["-h"], kind: "boolean", description: "show command help" },
+  {
+    name: "run",
+    aliases: ["-r"],
+    kind: "value",
+    description: "run ID to export (or accept it as the first positional)",
+  },
+  {
+    name: "latest",
+    kind: "boolean",
+    description: "export the newest primary run's lineage",
+  },
+  {
+    name: "out",
+    aliases: ["-o"],
+    kind: "value",
+    description: "publication output directory (default: publication)",
+  },
+];
+
 export function flagsForCommand(command: RunnerCommand): readonly FlagSpec[] {
   switch (command) {
     case "validate":
@@ -76,7 +97,7 @@ export function flagsForCommand(command: RunnerCommand): readonly FlagSpec[] {
     case "retry-failed":
       return SELECTOR_FLAGS;
     case "export":
-      return COMMON_FLAGS;
+      return EXPORT_FLAGS;
   }
 }
 
@@ -155,7 +176,10 @@ export function describeFlags(specs: readonly FlagSpec[]): string[] {
     .map((spec) => {
       const names = [spec.name, ...(spec.aliases ?? [])].filter((name) => name.length > 1);
       const rendered = names
-        .map((name) => (spec.kind === "value" ? `--${name} <value>` : `--${name}`))
+        .map((name) => {
+          const flag = name.startsWith("-") ? name : `--${name}`;
+          return spec.kind === "value" ? `${flag} <value>` : flag;
+        })
         .join(", ");
       return `  ${rendered.padEnd(30)}${spec.description}`;
     });

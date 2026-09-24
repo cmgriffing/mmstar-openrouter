@@ -17,7 +17,7 @@ mmstar <command> [options]
 | `resume ID\|--latest` | Continue pending/cancelled/interrupted work in an existing run. |
 | `retry-failed ID\|--latest` | Create a linked recovery run for unresolved request failures. |
 | `restart ID\|--latest` | Create a new primary run with the original fixtures and frozen settings. |
-| `export` | Publication export (chunk 8). |
+| `export ID\|--latest` | Publish the selected run family as a validated SQLite snapshot with content-addressed images. |
 
 Exit codes: `0` success, `1` runtime failure (invalid run, provider halt, incomplete
 work), `2` usage or validation error, `130` interrupted before completion (SIGINT or a
@@ -87,6 +87,28 @@ results/<UTC-timestamp>_<8-hex>/run.lock        single-writer lock
 A run ID is `<UTC yyyy-mm-ddThh-mm-ss-mmmZ>_<8 hex>`; its timestamp makes directory
 listing chronological and the suffix makes it unique. The manifest is the frozen plan
 plus lifecycle state; outcomes and attempts live in per-model files.
+
+## Publication export
+
+`export --run ID` or `export --latest` turns durable run JSON into the immutable
+artifact the website deploys. `--out <dir>` changes the output directory (default
+`publication/`); the directory is Git-ignored. Exactly one selector is required, and
+export resolves the whole **family**: the topmost ancestor of the selected run plus all
+of its descendants, so restarts and recoveries travel together and the effective view
+can resolve each fixture exactly once.
+
+```bash
+mmstar export --latest                       # newest primary run's family
+mmstar export --run 20260923T053337000Z_deadbeef --out publication
+```
+
+Export never makes a provider request and never needs an API key. It reloads the
+dataset named by the frozen plan and refuses to publish when the dataset SHA-256 no
+longer matches, when a selected fixture (or its image) is missing, when a run file is
+corrupt or uses an unsupported version, or when an identity conflict would mix two
+different experiments. The artifact is built in a temp directory and verified before
+the previous publication is replaced, so a failed export always leaves the last valid
+publication in place. See `docs/publication.md` for the layout, schema, and views.
 
 ## Single writer, atomic checkpoints
 

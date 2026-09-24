@@ -49,6 +49,7 @@ import {
   isResumeCandidate,
   isRetryableFailureOutcome,
   outcomeIdentity,
+  PublicationError,
   type ReconciledRun,
   RunConflictError,
   RunCorruptError,
@@ -186,7 +187,7 @@ export function requestFromArgs(
     case "validate":
       return { ok: false, message: "validate does not start a run" };
     case "export":
-      return { ok: false, message: "export is implemented in a later chunk" };
+      return { ok: false, message: "export is parsed by its own command options" };
   }
 }
 
@@ -969,7 +970,7 @@ export class ProviderHaltError extends Error {
   }
 }
 
-function reportError(error: unknown, context: RunContext): CommandResult {
+export function reportError(error: unknown, context: RunContext): CommandResult {
   if (error instanceof ValidationError) {
     context.emit({ event: "error", kind: error.name, message: error.message });
     context.stderr.write(`mmstar: ${error.message}\n`);
@@ -982,7 +983,8 @@ function reportError(error: unknown, context: RunContext): CommandResult {
     error instanceof RunNotFoundError ||
     error instanceof RunLockedError ||
     error instanceof DatasetChangedError ||
-    error instanceof ProviderHaltError
+    error instanceof ProviderHaltError ||
+    error instanceof PublicationError
   ) {
     context.emit({ event: "error", kind: error.name, message: error.message });
     context.stderr.write(`mmstar: ${error.message}\n`);

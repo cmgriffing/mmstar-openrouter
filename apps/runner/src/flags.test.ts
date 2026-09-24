@@ -71,9 +71,15 @@ describe("command flag surfaces", () => {
     expect(flagsForCommand("restart").map((flag) => flag.name)).not.toContain("set");
   });
 
-  it("documents every flag it accepts", () => {
+  it("documents every flag it accepts with correct short aliases", () => {
     const described = describeFlags(flagsForCommand("benchmark"));
     expect(described.join("\n")).toContain("--set <value>");
     expect(described.join("\n")).toContain("--skip-preflight");
+    expect(described.join("\n")).toContain("-s <value>");
+    expect(described.join("\n")).not.toContain("---");
+
+    const exported = describeFlags(flagsForCommand("export"));
+    expect(exported.join("\n")).toContain("--run <value>, -r <value>");
+    expect(exported.join("\n")).toContain("--out <value>, -o <value>");
   });
 });

@@ -2,4 +2,8 @@ export * from "./atomic";
 export * from "./errors";
 export * from "./lineage";
 export * from "./paths";
+export * from "./publication/images";
+export * from "./publication/publish";
+export * from "./publication/sqlite-node";
+export * from "./publication/verify";
 export * from "./run-store";

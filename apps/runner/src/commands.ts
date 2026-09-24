@@ -65,7 +65,8 @@ export function formatCommandUsage(command: RunnerCommand): string {
     resume: "Continue a run's pending/cancelled/interrupted work with frozen settings.",
     "retry-failed": "Create a recovery run for unresolved request failures.",
     restart: "Create a new primary run with the original fixtures and settings.",
-    export: "Export durable run JSON into a publication artifact (implemented in chunk 8).",
+    export:
+      "Export a run family into a validated SQLite publication with content-addressed images.",
   };
   return [
     `Usage: mmstar ${command} [options]`,
@@ -76,6 +77,6 @@ export function formatCommandUsage(command: RunnerCommand): string {
     ...describeFlags(flagsForCommand(command)),
     "",
     "Run IDs are the directory names under the results root; use --latest to select",
-    "the newest primary run.",
+    "the newest primary run. Export writes publication/, which stays Git-ignored.",
   ].join("\n");
 }

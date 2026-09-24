@@ -78,3 +78,47 @@ export class RunConflictError extends RunStoreError {
     this.id = id;
   }
 }
+
+/**
+ * Publication (SQLite/image export) failures. `code` is a stable machine-readable
+ * token so the CLI and tests can distinguish failures without matching prose.
+ */
+export class PublicationError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "PublicationError";
+    this.code = code;
+  }
+}
+
+/** Two imports claim the same durable ID with different content. */
+export class PublicationConflictError extends PublicationError {
+  readonly id: string;
+
+  constructor(id: string, message: string) {
+    super("publication_conflict", `conflicting publication record for ${id}: ${message}`);
+    this.name = "PublicationConflictError";
+    this.id = id;
+  }
+}
+
+/** A publication artifact or import input failed validation. */
+export class PublicationValidationError extends PublicationError {
+  constructor(message: string) {
+    super("publication_invalid", message);
+    this.name = "PublicationValidationError";
+  }
+}
+
+/** An image could not be decoded, validated, or published. */
+export class PublicationImageError extends PublicationError {
+  readonly fixtureId: string | null;
+
+  constructor(message: string, fixtureId: string | null = null) {
+    super("publication_image", message);
+    this.name = "PublicationImageError";
+    this.fixtureId = fixtureId;
+  }
+}

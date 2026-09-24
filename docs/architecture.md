@@ -107,11 +107,18 @@ alias containing every effort variant and attempt. A single locked writer checkp
 atomically (temp file + rename) after attempt starts and after terminal outcomes, so a
 crash always leaves a complete previous file. `resume` reconstructs progress from the
 validated model files, `retry-failed` creates a linked recovery run, and `restart`
-creates a new primary run from the original frozen settings. Export validates that JSON
-and produces a SQLite publication plus content-addressed images under generated asset
-directories. Generated results, publication assets, and images are Git-ignored;
-`MMStar.tsv` stays the single committed image source. Command and recovery semantics are
-documented in `docs/runner.md`; publication and website details land in chunks 8–10.
+creates a new primary run from the original frozen settings.
+
+`export --run ID|--latest` publishes the whole run family into `publication/`: a
+normalized SQLite snapshot (`benchmark.sqlite`), content-addressed original images under
+`benchmark-images/`, and a `manifest.json` binding database hash, source hashes, and the
+image inventory. The build is verified before an atomic directory swap, so a failed
+export leaves the previous publication intact. Generated results, publication assets,
+and images are Git-ignored; `MMStar.tsv` stays the single committed image source.
+Command and recovery semantics are documented in `docs/runner.md`; the schema, views,
+projection rules, and measured artifact sizes are documented in `docs/publication.md`.
+The website adapters and visualization (chunks 9–10) consume one verified publication
+per deployment and never write to it.
 
 ## Planning and sessions
 

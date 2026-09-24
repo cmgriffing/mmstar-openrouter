@@ -10,6 +10,7 @@
 import { formatCommandUsage, formatUsage, parseCommand } from "./commands";
 import { buildRunContext } from "./context";
 import { execute, type RunContext, requestFromArgs } from "./execute";
+import { executeExport, exportOptionsFromArgs } from "./export";
 import { flagsForCommand, parseFlags } from "./flags";
 import { executeValidate } from "./validate";
 
@@ -77,8 +78,17 @@ export async function runCli(
   }
 
   if (command === "export") {
-    err("mmstar: export is implemented in a later chunk");
-    return 2;
+    if (!helpCheck.ok) {
+      err(`mmstar: ${helpCheck.message}`);
+      return 2;
+    }
+    const parsedExport = exportOptionsFromArgs(args);
+    if (!parsedExport.ok) {
+      err(`mmstar: ${parsedExport.message}`);
+      err(formatCommandUsage(command));
+      return 2;
+    }
+    return (await executeExport(baseContext(), parsedExport.options)).exitCode;
   }
 
   const request = requestFromArgs(command, args);
