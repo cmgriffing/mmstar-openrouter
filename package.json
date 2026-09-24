@@ -27,5 +27,8 @@
     "@biomejs/biome": "catalog:",
     "turbo": "catalog:",
     "typescript": "catalog:"
+  },
+  "dependencies": {
+    "varlock": "^1.20.0"
   }
 }
