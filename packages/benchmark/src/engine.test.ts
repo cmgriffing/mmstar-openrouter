@@ -5,6 +5,7 @@ import {
   BenchmarkEngine,
   type CompletionProvider,
   type EngineClock,
+  type EngineFixture,
   type EngineRunResult,
 } from "./engine";
 import type { EngineEvent } from "./events";
@@ -162,7 +163,7 @@ function evaluation(
   };
 }
 
-function fixture(id: string, expectedAnswer = "A", category = "math") {
+function fixture(id: string, expectedAnswer = "A", category = "math"): EngineFixture {
   return {
     fixtureId: id,
     category,
@@ -291,6 +292,27 @@ describe("BenchmarkEngine scheduling", () => {
       { text: expect.stringContaining("Question 2?") },
     ]);
     expect(result.state).toBe("completed");
+  });
+
+  it("scopes fixtures to the evaluations that selected them", async () => {
+    const h = harness({
+      evaluations: [evaluation("a", "shared"), evaluation("b", "shared")],
+      fixtures: [fixture("0"), { ...fixture("1"), evaluationIds: ["b::default"] }],
+      respond: () => ok("A"),
+    });
+
+    const result = await h.run();
+
+    // Fixture 1 belongs to evaluation b only: three calls instead of four.
+    const models = h.calls.map((call) => call.payload.model);
+    expect(models.filter((model) => model === "vendor/a")).toHaveLength(1);
+    expect(models.filter((model) => model === "vendor/b")).toHaveLength(2);
+    const callTexts = h.calls.map((call) => {
+      const part = call.payload.messages[0]?.content[0];
+      return part?.type === "text" ? part.text : "";
+    });
+    expect(callTexts.filter((text) => text.includes("Question 1?"))).toHaveLength(1);
+    expect(outcomeFor(result, "b::default", "1")?.state).toBe("settled");
   });
 
   it("shares a 429 cooldown across every model in the group while independent groups progress", async () => {

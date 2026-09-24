@@ -71,6 +71,31 @@ network request, so PTY checks work without `OPENROUTER_API_KEY`.
 `OPENROUTER_API_KEY` is read from the environment by the runner only. It is declared as
 a Turbo pass-through variable and must never be written to configuration or artifacts.
 
+## Verification and release checklist
+
+Every automated check uses deterministic mock providers; no step below requires a paid
+request or a credential.
+
+1. `pnpm install --frozen-lockfile` — the lockfile is the install of record.
+2. `pnpm check` — typecheck, lint, and tests across every package (includes the
+   Bun-native OpenTUI frame tests via `pnpm --filter @mmstar/runner test`).
+3. `pnpm build` — runner CLI bundle and the default Astro build.
+4. `bun apps/runner/scripts/e2e-workflow.ts --workdir /tmp/mmstar-e2e` (or
+   `pnpm --filter @mmstar/runner e2e`) — validate, interrupted run, resume,
+   retry-failed, restart, export, publication verification, and repository queries
+   against real dataset fixtures.
+5. Build the target website (`pnpm --filter @mmstar/web build:node|build:netlify|
+   build:vercel|build:cloudflare`) against the publication from step 4 or a real run,
+   and smoke the query endpoints. `docs/website.md` has the per-target commands and
+   the endpoint matrix.
+6. **Hosted checks remain open.** Netlify, Vercel, and Cloudflare hosted query/image
+   behavior is verified only by a real deployment; local `wrangler dev` and emulated
+   function entry points are recorded as local evidence in `docs/website.md`. Do not
+   mark a target production-ready without a hosted smoke result.
+7. **Rollback.** Deployments are immutable publications: redeploy the previous
+   versioned artifact to roll back. Keep the prior `publication/` output (or the
+   deployed artifact) until the new deployment is verified.
+
 ## Repository conventions
 
 - **Shared packages stay runtime-neutral.** `packages/config`, `packages/benchmark`,

@@ -11,9 +11,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompletionProvider, NormalizedCompletion, ProviderResult } from "@mmstar/benchmark";
-import { RunStore } from "@mmstar/results/node";
+import { openSqliteDatabase, RunStore, verifyPublication } from "@mmstar/results/node";
 import { describe, expect, it } from "vitest";
 import { type EngineObserver, execute, type RunContext } from "../src/execute";
+import { executeExport } from "../src/export";
 import { executeValidate } from "../src/validate";
 
 const T0 = Date.parse("2026-09-23T03:33:37.000Z");
@@ -353,7 +354,12 @@ describe("resume (5.3)", () => {
       const alpha = JSON.parse(readFileSync(modelPath, "utf8")) as {
         evaluations: {
           outcomes: unknown[];
-          attempts: { attemptId: string; state: string; finishedAt: string | null }[];
+          attempts: {
+            attemptId: string;
+            state: string;
+            startedAt: string;
+            finishedAt: string | null;
+          }[];
         }[];
       };
       const evaluation = alpha.evaluations[0];
@@ -389,16 +395,31 @@ describe("resume (5.3)", () => {
 
       const resumedId = lastRunId(h);
       const reconciled = h.store.readModelRecords(resumedId).flatMap((file) => file.evaluations);
-      const carriedOver = reconciled
-        .flatMap((record) => record.attempts)
-        .filter((attempt) => attempt.attemptId === startedAttempt.attemptId);
-      expect(carriedOver).toHaveLength(1);
-      // The interrupted attempt is preserved as evidence beside the new one.
       const alphaEvaluation = reconciled.find((record) => record.evaluationId === "alpha::default");
       expect(alphaEvaluation?.outcomes.filter((outcome) => outcome.fixtureId === "0")).toHaveLength(
         1,
       );
-      expect(alphaEvaluation?.attempts.length).toBeGreaterThan(1);
+
+      // The interrupted attempt stays in the run that made it...
+      const sourceEvaluation = h.store
+        .readModelRecords(runId)
+        .flatMap((file) => file.evaluations)
+        .find((record) => record.evaluationId === "alpha::default");
+      const sourceAttempt = sourceEvaluation?.attempts.find(
+        (attempt) => attempt.attemptId === startedAttempt.attemptId,
+      );
+      expect(sourceAttempt).toMatchObject({ state: "submitted", finishedAt: null });
+
+      // ...and the child records its own fresh attempt, with the same
+      // deterministic attempt ID. Carrying the parent's attempt instead would
+      // drop the child's real request from the billing ledger.
+      const childAttempt = alphaEvaluation?.attempts.find((attempt) =>
+        attempt.attemptId.startsWith("alpha::default:0:"),
+      );
+      expect(childAttempt?.state).toBe("completed");
+      expect(childAttempt?.finishedAt).not.toBeNull();
+      expect(childAttempt?.startedAt).not.toBe(startedAttempt.startedAt);
+      expect(alphaEvaluation?.attempts).toHaveLength(2); // fixture 0 and fixture 1
     } finally {
       h.cleanup();
     }
@@ -509,6 +530,51 @@ describe("retry-failed (5.4)", () => {
       const result = await execute({ mode: "retry-failed", selector: { runId } }, h.context);
       expect(result.exitCode).toBe(0);
       expect(h.events.some((event) => event.event === "run.nothing-to-do")).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("reissues only the evaluations with unresolved failures for a fixture", async () => {
+    const h = harness({
+      provider: async (payload) => {
+        const part = payload.messages[0]?.content[0];
+        const text = part?.type === "text" ? part.text : "";
+        if (text.includes("sky") && payload.model === "vendor/alpha") return failure("network");
+        return success(text.includes("sky") ? "B" : "A");
+      },
+    });
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const primaryId = lastRunId(h);
+      expect(
+        allOutcomes(h, primaryId)
+          .filter((outcome) => outcome.state !== "settled")
+          .map((outcome) => outcome.fixtureId),
+      ).toEqual(["0"]);
+
+      let recoveryCalls = 0;
+      const recoveryProvider: CompletionProvider = async (payload) => {
+        recoveryCalls += 1;
+        const part = payload.messages[0]?.content[0];
+        const text = part?.type === "text" ? part.text : "";
+        return success(text.includes("sky") ? "B" : "A");
+      };
+      const result = await execute(
+        { mode: "retry-failed", selector: { runId: primaryId } },
+        { ...h.context, provider: recoveryProvider },
+      );
+      expect(result.exitCode).toBe(0);
+
+      const recoveryId = lastRunId(h);
+      // Beta already scored fixture 0, so only alpha is reissued for it.
+      expect(recoveryCalls).toBe(1);
+      const attempts = h.store
+        .readModelRecords(recoveryId)
+        .flatMap((file) => file.evaluations)
+        .flatMap((evaluation) => evaluation.attempts);
+      expect(attempts.map((attempt) => attempt.evaluationId)).toEqual(["alpha::default"]);
+      expect(h.store.readManifest(recoveryId).lineage.recoveredFixtureIds).toEqual(["0"]);
     } finally {
       h.cleanup();
     }
@@ -632,6 +698,152 @@ describe("validate command", () => {
       const result = await executeValidate(h.context, { preflight: false });
       expect(result.exitCode).toBe(2);
       expect(h.events.some((event) => event.kind === "ValidationError")).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+/** Chunk 11.2: error paths across the command, persistence, and export boundaries. */
+describe("hardening boundaries (11.2)", () => {
+  function buildReasoningNoneConfig(): string {
+    return `${JSON.stringify(
+      {
+        version: 1,
+        dataset: { path: "fixtures.tsv" },
+        execution: {
+          maxConcurrentGroups: 2,
+          maxRetries: 1,
+          requestTimeoutMs: 5000,
+          maxRequestsPerMinute: null,
+          resultsRoot: "results",
+        },
+        models: {
+          alpha: {
+            openRouterId: "vendor/alpha",
+            reasoningModes: ["default"],
+            rateLimitGroup: "g1",
+          },
+          beta: { openRouterId: "vendor/beta", reasoningModes: ["default"], rateLimitGroup: "g2" },
+          gamma: { openRouterId: "vendor/gamma", reasoningModes: ["none"], rateLimitGroup: "g3" },
+        },
+        sets: { demo: { models: ["alpha", "beta", "gamma"] } },
+      },
+      null,
+      2,
+    )}\n`;
+  }
+
+  it("halts on an authentication failure, keeps the partial run auditable, and publishes it", async () => {
+    let calls = 0;
+    const h = harness({
+      provider: async () => {
+        calls += 1;
+        return calls === 1 ? failure("auth") : success("B");
+      },
+    });
+    try {
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(1);
+
+      const runId = lastRunId(h);
+      expect(readManifest(h, runId).lifecycle).toMatchObject({ state: "failed" });
+      const finished = h.events.find((event) => event.event === "run.finished");
+      expect(finished?.halt).not.toBeNull();
+
+      const outcomes = allOutcomes(h, runId);
+      expect(outcomes.filter((outcome) => outcome.state === "failed")).toHaveLength(1);
+      expect(outcomes.find((outcome) => outcome.state === "failed")?.failure).toBe("auth");
+      expect(outcomes.some((outcome) => outcome.state === "pending")).toBe(true);
+      const authAttempts = h.store
+        .readModelRecords(runId)
+        .flatMap((file) => file.evaluations)
+        .flatMap((evaluation) => evaluation.attempts)
+        .filter((attempt) => attempt.failure?.category === "auth");
+      expect(authAttempts).toHaveLength(1);
+
+      // An operator must fix credentials first; retry-failed must not reissue it.
+      const retry = await execute({ mode: "retry-failed", selector: { runId } }, h.context);
+      expect(retry.exitCode).toBe(0);
+      expect(h.events.some((event) => event.event === "run.nothing-to-do")).toBe(true);
+      expect(h.store.listRunIds()).toHaveLength(1);
+
+      // The halted family still exports: a partial run is publishable evidence.
+      const outDir = join(h.dir, "publication");
+      const exported = await executeExport(h.context, { latest: true, outDir });
+      expect(exported.exitCode).toBe(0);
+      verifyPublication(outDir);
+      const database = openSqliteDatabase(join(outDir, "benchmark.sqlite"), { readOnly: true });
+      try {
+        const row = database
+          .prepare("SELECT COUNT(*) AS n FROM outcomes WHERE failure_category = 'auth'")
+          .get();
+        expect(Number(row?.n)).toBe(1);
+        const attempts = database.prepare("SELECT COUNT(*) AS n FROM attempts").get();
+        expect(Number(attempts?.n)).toBeGreaterThanOrEqual(1);
+      } finally {
+        database.close();
+      }
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("fails closed on a corrupt model file before resuming any work", async () => {
+    const h = harness();
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const runId = lastRunId(h);
+      const runsBefore = h.store.listRunIds().length;
+
+      writeFileSync(join(h.store.paths(runId).modelsDir, "alpha.json"), "{ broken");
+      h.context.provider = async () => {
+        throw new Error("provider must not be called for a corrupt run");
+      };
+      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(result.exitCode).toBe(1);
+      expect(h.events.some((event) => event.kind === "RunCorruptError")).toBe(true);
+      expect(h.store.listRunIds()).toHaveLength(runsBefore);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("rejects a continuation when frozen capabilities no longer support the plan", async () => {
+    const h = harness();
+    try {
+      writeFileSync(join(h.dir, "mmstar.config.json"), buildReasoningNoneConfig());
+      const first = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(first.exitCode).toBe(0);
+      const runId = lastRunId(h);
+
+      // Lose one outcome so resume has work, then mark the model's reasoning as
+      // mandatory in the frozen snapshot: `none` can no longer be requested.
+      const modelPath = join(h.store.paths(runId).modelsDir, "alpha.json");
+      const alpha = JSON.parse(readFileSync(modelPath, "utf8")) as {
+        evaluations: { outcomes: unknown[] }[];
+      };
+      alpha.evaluations[0]?.outcomes.pop();
+      writeFileSync(modelPath, JSON.stringify(alpha));
+      const manifestPath = h.store.paths(runId).manifestFile;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        capabilities: { modelId: string; reasoning: { mandatory: boolean } }[];
+      };
+      const gamma = manifest.capabilities.find((item) => item.modelId === "vendor/gamma");
+      if (gamma === undefined) throw new Error("gamma capability snapshot missing");
+      gamma.reasoning.mandatory = true;
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      let calls = 0;
+      h.context.provider = async () => {
+        calls += 1;
+        return success("B");
+      };
+      const resumed = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(resumed.exitCode).toBe(2);
+      expect(h.events.some((event) => event.kind === "ValidationError")).toBe(true);
+      expect(calls).toBe(0);
+      expect(h.store.listRunIds()).toHaveLength(1);
     } finally {
       h.cleanup();
     }

@@ -137,8 +137,14 @@ publication in place. See `docs/publication.md` for the layout, schema, and view
 - **`retry-failed`** creates a `recovery` child run linked by `lineage.parentRunId`. It
   selects only unresolved request failures (timeouts, network, rate limits, selected
   5xx, invalid requests, unknown transport failures), never scored responses, and never
-  authentication/configuration failures that require an operator fix. If nothing is
-  unresolved it does nothing and reports `run.nothing-to-do`.
+  authentication/configuration failures that require an operator fix. Selection is per
+  evaluation: a fixture with one unresolved evaluation reissues only that evaluation,
+  not every variant of the fixture. If nothing is unresolved it does nothing and reports
+  `run.nothing-to-do`.
+- **Continuation scope and ownership.** A continuation's model files carry prior
+  outcomes (so the child counts full plan progress) but record only the attempts that
+  execution made; ancestor attempts stay in the ancestor run's files. The exported
+  family billing ledger therefore sums each submitted request exactly once.
 - **`restart`** creates a new `restart` primary run covering the original fixture
   selection with the original frozen settings and capability snapshot. It becomes the
   `--latest` primary; recovery children never do.

@@ -6,7 +6,6 @@
  * the merge that preserves prior outcomes when only part of a run is reissued.
  */
 import type {
-  AttemptRecord,
   EvaluationRecord,
   ModelRecordFile,
   OutcomeRecord,
@@ -30,10 +29,17 @@ export function modelFilesFor(
 
 /**
  * Merge a partial execution into the full plan. Every fixture in the frozen
- * plan keeps a slot: a reissued fixture takes its new outcome and attempts, and
- * every other fixture keeps the prior durable outcome verbatim. Without this a
- * recovery run's model files would contain only the recovered fixtures and
- * silently drop history.
+ * plan keeps a slot: a reissued fixture takes its new outcome, and every other
+ * fixture keeps the prior durable outcome verbatim. Without this a recovery
+ * run's model files would contain only the recovered fixtures and silently drop
+ * history.
+ *
+ * Attempts are the ones this execution actually made. Ancestor attempts stay in
+ * the ancestor's model files: copying them into the child would double-count the
+ * family billing ledger, and because attempt IDs are deterministic
+ * (`evaluation:fixture:number`) the carried copy would also shadow the attempt
+ * the child really made. Outcomes are still carried, because the child must be
+ * able to count plan progress without reissuing resolved work.
  */
 export function mergePlanEvaluations(
   manifest: RunManifest,
@@ -63,10 +69,7 @@ export function mergePlanEvaluations(
       return emptyPendingOutcome(plan.evaluationId, fixtureId);
     });
 
-    const attempts = dedupeAttempts([
-      ...(previousEvaluation?.attempts ?? []),
-      ...(workEvaluation?.attempts ?? []),
-    ]);
+    const attempts = [...(workEvaluation?.attempts ?? [])];
 
     return {
       evaluationId: plan.evaluationId,
@@ -77,22 +80,6 @@ export function mergePlanEvaluations(
       attempts,
     };
   });
-}
-
-/**
- * One entry per attempt ID, first occurrence winning. A continuation writes its
- * new attempts into the child while carrying the source run's attempts, and the
- * same attempt can arrive from both sides during a checkpoint.
- */
-function dedupeAttempts(attempts: readonly AttemptRecord[]): AttemptRecord[] {
-  const seen = new Set<string>();
-  const result: AttemptRecord[] = [];
-  for (const attempt of attempts) {
-    if (seen.has(attempt.attemptId)) continue;
-    seen.add(attempt.attemptId);
-    result.push(attempt);
-  }
-  return result;
 }
 
 function planFixtureIds(

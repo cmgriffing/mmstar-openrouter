@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "bun run src/index.tsx",
     "demo": "bun run src/index.tsx --demo",
+    "e2e": "bun run scripts/e2e-workflow.ts",
     "smoke": "bun run src/index.tsx --smoke",
     "build": "bun build ./src/cli.ts --target=bun --outdir=dist",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src",
+    "lint": "biome check src scripts",
     "test": "vitest run && bun test ./src/tui/render.bun.tsx",
     "validate": "bun run src/cli.ts validate",
     "benchmark": "bun run src/cli.ts benchmark",

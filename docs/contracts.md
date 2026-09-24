@@ -118,7 +118,11 @@ runtime; `apps/runner/src/transport.ts` is the only `fetch` implementation.
 - `RunManifest` = frozen configuration + plan + lifecycle; `lineage.kind` is `primary`,
   `recovery`, or `restart`, with `parentRunId` and (for recovery) `recoveredFixtureIds`.
 - `ModelRecordFile` holds one alias's `EvaluationRecord[]`, each with `outcomes` and
-  `attempts`. Outcomes and attempts have stable unique IDs.
+  `attempts`. A continuation run carries prior outcomes so the child can count plan
+  progress, but its `attempts` are only the requests that execution made: ancestor
+  attempts stay in the ancestor's model files, so the family billing ledger counts every
+  submitted request exactly once (attempt IDs are deterministic —
+  `evaluation:fixture:number` — and would otherwise shadow the child's real attempt).
 - `RunManifest.capabilities` holds one versioned `ModelCapabilitySnapshot` per distinct
   model in `plan.evaluations`, in first-seen order: input modalities, image support, and
   the raw reasoning metadata. It is the frozen evidence preflight used, so a later
@@ -163,6 +167,9 @@ a terminal.
   flight per group across models and effort variants. Groups run round-robin under
   `maxConcurrentGroups`, and `maxRequestsPerMinute` applies a sliding one-minute
   account-wide request cap with its own cooldown event (`reason: "request_cap"`).
+  A fixture may declare `evaluationIds` to scope itself to specific evaluations;
+  continuations use this so a recovery reissues only the evaluations that still have
+  unresolved work for a fixture instead of re-running already-scored variants.
   Pause stops new launches while in-flight work settles; resume continues; stop aborts
   in-flight requests (recorded `cancelled`) and leaves never-started work `pending`.
 - **Retries.** Only `isRetryableFailure` failures retry, up to `maxRetries` after the

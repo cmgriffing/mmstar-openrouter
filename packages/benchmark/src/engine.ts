@@ -58,6 +58,13 @@ export interface EngineFixture {
   expectedAnswer: string;
   prompt: PromptFixtureInput;
   /**
+   * Evaluation IDs this fixture is scheduled for. Omitted for primary runs,
+   * where every fixture runs under every evaluation. Continuations scope work
+   * to the evaluations that actually have unresolved fixtures, so a recovery
+   * cannot re-run an evaluation whose response was already scored.
+   */
+  evaluationIds?: readonly string[];
+  /**
    * Recovery lineage for this fixture's outcomes. A recovery/restart execution
    * passes the source run/outcome IDs so the new records link back to the
    * failure they resolve; original work leaves this undefined.
@@ -211,6 +218,12 @@ export class BenchmarkEngine {
         this.groups.push(group);
       }
       for (const fixture of this.fixtures) {
+        if (
+          fixture.evaluationIds !== undefined &&
+          !fixture.evaluationIds.includes(evaluation.evaluationId)
+        ) {
+          continue;
+        }
         const item: WorkItem = {
           evaluation,
           fixture,

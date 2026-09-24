@@ -236,6 +236,7 @@ async function runFresh(set: string, context: RunContext, store: RunStore): Prom
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
 
+  const evaluations = preflightEvaluations(manifest);
   store.createRun({ runId, manifest });
   context.emit({
     event: "run.created",
@@ -250,7 +251,7 @@ async function runFresh(set: string, context: RunContext, store: RunStore): Prom
     context,
     store,
     manifest,
-    evaluations: preflightEvaluations(manifest),
+    evaluations,
     fixtures: buildFixtures(manifest, dataset.records, undefined),
     kind: "primary",
   });
@@ -293,6 +294,7 @@ async function runRestart(
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
 
+  const evaluations = preflightEvaluations(manifest);
   store.createRun({ runId, manifest });
   context.emit({
     event: "run.created",
@@ -307,7 +309,7 @@ async function runRestart(
     context,
     store,
     manifest,
-    evaluations: preflightEvaluations(manifest),
+    evaluations,
     fixtures: buildFixtures(manifest, dataset.records, undefined),
     kind: "primary",
   });
@@ -389,6 +391,7 @@ async function continueFromSource(
     configuration: { ...source.configuration, execution: config.execution },
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
+  const evaluations = preflightEvaluations(manifest);
   store.createRun({ runId, manifest });
 
   context.emit({
@@ -418,7 +421,7 @@ async function continueFromSource(
     context,
     store,
     manifest,
-    evaluations: preflightEvaluations(manifest),
+    evaluations,
     fixtures: buildFixtures(manifest, dataset.records, selection.evaluationFixtures),
     kind: mode === "resume" ? "resume" : "recovery",
     previousFiles,
@@ -872,11 +875,19 @@ function buildFixtures(
 
   if (work === undefined) return fixtures;
 
-  const selected = new Set<string>();
-  for (const fixtureIds of work.values()) {
-    for (const fixtureId of fixtureIds) selected.add(fixtureId);
+  // Scope each fixture to the evaluations that selected it. The engine
+  // otherwise cross-products every evaluation with every fixture, which would
+  // re-run already-scored variants of a fixture that only one evaluation still
+  // needs to resolve.
+  const scoped: EngineFixture[] = [];
+  for (const fixture of fixtures) {
+    const evaluationIds = [...work.entries()]
+      .filter(([, fixtureIds]) => fixtureIds.includes(fixture.fixtureId))
+      .map(([evaluationId]) => evaluationId);
+    if (evaluationIds.length === 0) continue;
+    scoped.push({ ...fixture, evaluationIds });
   }
-  return fixtures.filter((fixture) => selected.has(fixture.fixtureId));
+  return scoped;
 }
 
 function uniqueFixtures(selection: Map<string, string[]>): string[] {
