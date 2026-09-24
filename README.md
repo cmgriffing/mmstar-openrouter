@@ -12,6 +12,8 @@ Workspace documentation:
 - [`docs/configuration.md`](./docs/configuration.md) — `mmstar.config.json` fields, reasoning modes, and routing settings
 - [`docs/contracts.md`](./docs/contracts.md) — dataset parsing, schema versions, run records, and engine events
 - [`docs/development.md`](./docs/development.md) — pinned toolchain, commands, conventions, and the bounded-session workflow
+- [`docs/website.md`](./docs/website.md) — query endpoints, per-target build/deploy commands, and verification status
+- [`docs/adr/0001-web-sqlite-reader.md`](./docs/adr/0001-web-sqlite-reader.md) — the WASM SQLite reader decision and measured evidence
 
 Quick start:
 

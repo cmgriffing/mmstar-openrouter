@@ -112,6 +112,17 @@ export class PublicationValidationError extends PublicationError {
   }
 }
 
+/** A website query parameter failed validation before any SQL was prepared. */
+export class QueryValidationError extends PublicationError {
+  readonly field: string;
+
+  constructor(field: string, message: string) {
+    super("query_invalid", `invalid query parameter ${field}: ${message}`);
+    this.name = "QueryValidationError";
+    this.field = field;
+  }
+}
+
 /** An image could not be decoded, validated, or published. */
 export class PublicationImageError extends PublicationError {
   readonly fixtureId: string | null;

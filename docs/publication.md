@@ -112,6 +112,11 @@ itself runs in under a second on this volume once the dataset is loaded.
 
 ## Deploying
 
-The artifact layout is platform-neutral; `benchmark.sqlite` and `benchmark-images/`
-are copied into the web deployment's asset root. Per-target adapters, query endpoints,
-and deployment commands are documented with the website work (chunks 9–10).
+The artifact layout is platform-neutral: the website build copies
+`benchmark.sqlite`, `benchmark-images/`, and `sql-wasm.wasm` into its static
+asset root, and the query endpoints read the snapshot through the read-only
+repository. Per-target build/deploy commands, endpoint contracts, image serving,
+and the current verification status are documented in `docs/website.md`. Hosted
+Netlify/Vercel/Cloudflare behavior remains unverified until a real deployment
+smoke test is recorded; SQLite reader compatibility is established by the gate
+in `docs/adr/0001-web-sqlite-reader.md`.

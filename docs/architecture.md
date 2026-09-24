@@ -117,8 +117,17 @@ export leaves the previous publication intact. Generated results, publication as
 and images are Git-ignored; `MMStar.tsv` stays the single committed image source.
 Command and recovery semantics are documented in `docs/runner.md`; the schema, views,
 projection rules, and measured artifact sizes are documented in `docs/publication.md`.
-The website adapters and visualization (chunks 9–10) consume one verified publication
-per deployment and never write to it.
+
+`packages/results/src/query/repository.ts` defines the read-only website contract over
+that snapshot: fixed parameterized statements (comparisons, categories, paginated
+fixture drilldown, fixture detail), page bounds, and no arbitrary SQL. `apps/web` builds
+the same Astro codebase for Node, Netlify, Vercel, and Cloudflare Workers; platform code
+is confined to where the database and WASM assets come from (`apps/web/src/server/publication.ts`,
+with sql.js as the WASM reader on every target). Endpoint contracts, per-target
+build/deploy commands, and the measured runtime evidence are documented in
+`docs/website.md` and `docs/adr/0001-web-sqlite-reader.md`. Hosted Netlify/Vercel/
+Cloudflare behavior stays explicitly unverified until a real deployment smoke check is
+recorded; the full comparison and drilldown UI lands in chunk 10.
 
 ## Planning and sessions
 

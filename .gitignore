@@ -20,6 +20,12 @@ coverage/
 benchmark-images/
 apps/web/public/publication/
 apps/web/public/benchmark-images/
+apps/web/public/sql-wasm.wasm
+
+# Platform build output (Cloudflare wrangler state, Netlify, Vercel).
+apps/web/.netlify/
+apps/web/.vercel/
+apps/web/.wrangler/
 
 # Local ephemeral planning artifacts.
 /openspec/

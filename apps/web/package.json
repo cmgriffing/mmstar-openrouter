@@ -4,24 +4,39 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "node scripts/sync-publication.mjs && astro dev",
+    "build": "node scripts/sync-publication.mjs && astro build",
+    "build:node": "node scripts/sync-publication.mjs && MMSTAR_ADAPTER=node astro build",
+    "build:cloudflare": "MMSTAR_ADAPTER=cloudflare pnpm build && node scripts/postprocess-cloudflare.mjs",
+    "build:netlify": "MMSTAR_ADAPTER=netlify pnpm build",
+    "build:vercel": "MMSTAR_ADAPTER=vercel pnpm build",
     "preview": "astro preview",
+    "sync:publication": "node scripts/sync-publication.mjs",
+    "smoke:reader": "bun scripts/measure-reader.ts",
     "typecheck": "astro check",
-    "lint": "biome check src",
+    "lint": "biome check src scripts",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@astrojs/react": "^7.0.0",
+    "@mmstar/results": "workspace:*",
     "astro": "^7.3.4",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "sql.js": "^1.14.2"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
+    "@astrojs/cloudflare": "^14.3.3",
+    "@astrojs/netlify": "^8.2.6",
+    "@astrojs/node": "^11.1.6",
+    "@astrojs/vercel": "^11.0.11",
+    "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@types/sql.js": "^1.4.11",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "^4.139.0"
   }
 }

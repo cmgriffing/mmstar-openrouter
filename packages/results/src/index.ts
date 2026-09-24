@@ -5,4 +5,5 @@ export * from "./publication/manifest";
 export * from "./publication/rows";
 export * from "./publication/schema";
 export * from "./publication/write";
+export * from "./query/repository";
 export * from "./records";
