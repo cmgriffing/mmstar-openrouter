@@ -1,0 +1,26 @@
+{
+  "$schema": "./mmstar.config.schema.json",
+  "version": 1,
+  "dataset": {
+    "path": "MMStar.tsv"
+  },
+  "execution": {
+    "maxConcurrentGroups": 4,
+    "maxRetries": 3,
+    "requestTimeoutMs": 120000,
+    "maxRequestsPerMinute": null,
+    "resultsRoot": "results"
+  },
+  "models": {
+    "space-bunny-alpha": {
+      "openRouterId": "stealth/space-bunny-alpha",
+      "reasoningModes": ["max", "xhigh", "high", "medium", "low"],
+      "rateLimitGroup": "testing-group"
+    }
+  },
+  "sets": {
+    "testing": {
+      "models": ["space-bunny-alpha"]
+    }
+  }
+}
