@@ -14,7 +14,7 @@
   "models": {
     "space-bunny-alpha": {
       "openRouterId": "stealth/space-bunny-alpha",
-      "reasoningModes": ["max", "xhigh", "high", "medium", "low"],
+      "reasoningModes": ["low"],
       "rateLimitGroup": "testing-group"
     }
   },

@@ -17,6 +17,7 @@ import {
   type EngineFixture,
   type EngineRunResult,
   type FixtureRecord,
+  OpenRouterClient,
   PROMPT_VERSION,
   type PreflightEvaluation,
   parseDatasetTsv,
@@ -88,7 +89,7 @@ export interface RunContext {
    */
   observeEngine?: (engine: BenchmarkEngine, control: EngineObserver) => void;
   revision?: () => Promise<{ revision: string | null; dirty: boolean }>;
-  /** Injected provider for tests; defaults to a fail-closed stub. */
+  /** Injected provider for tests; defaults to the OpenRouter client. */
   provider?: CompletionProvider;
 }
 
@@ -527,13 +528,14 @@ interface ExecuteManifestInput {
 async function executeManifest(input: ExecuteManifestInput): Promise<CommandResult> {
   const { context, store, manifest } = input;
   const lock = store.acquireLock(input.lockRunId ?? manifest.runId, { force: context.force });
+  const client = new OpenRouterClient({ transport: fetchTransport, apiKey: context.apiKey });
 
   const engine = new BenchmarkEngine({
     runId: manifest.runId,
     evaluations: input.evaluations,
     fixtures: input.fixtures,
     execution: manifest.configuration.execution,
-    provider: context.provider ?? unavailableProvider,
+    provider: context.provider ?? ((payload, control) => client.chatCompletion(payload, control)),
     sink: (event) => {
       context.engineEvents?.(event);
       context.emit({ event: "engine", runId: manifest.runId, ...event });
@@ -815,7 +817,6 @@ async function resolveCapabilities(
     return assumeCapabilities(plan);
   }
 
-  const { OpenRouterClient } = await import("@mmstar/benchmark");
   const client = new OpenRouterClient({ transport: fetchTransport, apiKey: context.apiKey });
   const catalog = await client.fetchModelCatalog();
   if (!catalog.ok) throw new ProviderHaltError(catalog.failure);
@@ -940,17 +941,6 @@ function nextSuffix(context: RunContext): string {
   if (context.suffix !== undefined) return context.suffix();
   return randomUUID().replace(/-/g, "").slice(0, 8);
 }
-
-const unavailableProvider: CompletionProvider = async () => ({
-  ok: false,
-  failure: {
-    category: "unknown",
-    message: "no provider was configured for this execution",
-    httpStatus: null,
-    retryAfterMs: null,
-  },
-  rawResponse: null,
-});
 
 function registerSignalHandlers(onSignal: () => void): () => void {
   const handler = (): void => onSignal();

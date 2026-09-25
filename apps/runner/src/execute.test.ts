@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompletionProvider, NormalizedCompletion, ProviderResult } from "@mmstar/benchmark";
 import { openSqliteDatabase, RunStore, verifyPublication } from "@mmstar/results/node";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type EngineObserver, execute, type RunContext } from "../src/execute";
 import { executeExport } from "../src/export";
 import { executeValidate } from "../src/validate";
@@ -181,6 +181,55 @@ function allOutcomes(harnessRef: Harness, runId: string) {
 }
 
 describe("run command (5.1, 5.2)", () => {
+  it("reports missing credentials without making a network request", async () => {
+    const h = harness();
+    delete h.context.provider;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).not.toBe(0);
+      const outcomes = allOutcomes(h, lastRunId(h));
+      expect(outcomes.some((outcome) => outcome.failure === "configuration")).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
+  it("uses OpenRouter when no test provider is injected", async () => {
+    const h = harness();
+    delete h.context.provider;
+    h.context.apiKey = "test-only-key";
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        id: "completion-test",
+        model: "vendor/alpha",
+        choices: [{ message: { content: "B" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const records = h.store
+        .readModelRecords(lastRunId(h))
+        .flatMap((file) => file.evaluations)
+        .flatMap((evaluation) => evaluation.outcomes);
+      expect(records.map((record) => record.failure)).toEqual([null, null, null, null]);
+      expect(records.every((record) => record.state === "settled")).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://openrouter.ai/api/v1/chat/completions",
+        expect.objectContaining({ method: "POST", signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
   it("creates a durable run with a frozen manifest and terminal records", async () => {
     const h = harness();
     try {
