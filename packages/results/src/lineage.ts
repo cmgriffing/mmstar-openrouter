@@ -53,6 +53,31 @@ export const RETRYABLE_FAILURE_CATEGORIES: readonly FailureCategory[] = [
   "unknown",
 ];
 
+/**
+ * Failure categories that prove the provider completed the exchange — the
+ * request reached upstream and produced a definitive answer (rejection,
+ * throttle, or policy refusal). Timeout, network, cancelled, and unknown
+ * failures leave upstream completion unknown, and a marker for one of those
+ * must still be reported as indeterminate.
+ */
+const KNOWN_FAILURE_CATEGORIES: readonly FailureCategory[] = [
+  "rate_limit",
+  "server_error",
+  "invalid_request",
+  "content_filter",
+  "auth",
+  "configuration",
+];
+
+/**
+ * True when a durable attempt failure proves the provider round-trip finished.
+ * Used to keep a stale in-flight marker from reporting a known classified
+ * failure as an unknown upstream completion.
+ */
+export function isKnownFailureCategory(category: FailureCategory): boolean {
+  return KNOWN_FAILURE_CATEGORIES.includes(category);
+}
+
 /** Fixtures a plain `resume` may reissue: never attempted, cancelled, or interrupted. */
 export function isResumeCandidate(outcome: OutcomeRecord): boolean {
   return (

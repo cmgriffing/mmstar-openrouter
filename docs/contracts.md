@@ -147,7 +147,12 @@ runtime; `apps/runner/src/transport.ts` is the only `fetch` implementation.
 `group.cooldown.ended`, `engine.paused`, `engine.resumed`, `engine.stopping`,
 `run.finished`). Payloads carry IDs, classifications, timings, and usage/cost records only —
 never raw response text — so event batching and bounded UI history cannot be inflated by
-provider output. `evaluation.started` also carries `openRouterId` and `rateLimitGroup`,
+provider output. `run.started` carries an additive `evaluations` array (`evaluationId`,
+`modelAlias`, `openRouterId`, `reasoningMode`, `rateLimitGroup`, `fixtures`) whose
+`fixtures` count is the execution's actual scoped work items for that evaluation, so a
+renderer can seed every row with a correct denominator before the first attempt; the
+field is additive at `ENGINE_EVENT_VERSION` 1 and older consumers may ignore it.
+`evaluation.started` also carries `openRouterId` and `rateLimitGroup`,
 and `attempt.finished` carries `modelUsed`/`upstreamProvider` (null when no response
 arrived) plus an optional `retryAt` (the scheduled retry time, or null when the attempt
 is terminal), so a renderer can show the active model/group, observed provider, and a

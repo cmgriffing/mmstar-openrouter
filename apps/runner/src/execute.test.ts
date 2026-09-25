@@ -7,11 +7,16 @@
  * needs a crash, the durable files are edited directly, which is exactly what a
  * process killed between two file replacements leaves behind.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompletionProvider, NormalizedCompletion, ProviderResult } from "@mmstar/benchmark";
-import { openSqliteDatabase, RunStore, verifyPublication } from "@mmstar/results/node";
+import {
+  InflightMarkerWriter,
+  openSqliteDatabase,
+  RunStore,
+  verifyPublication,
+} from "@mmstar/results/node";
 import { describe, expect, it, vi } from "vitest";
 import { type EngineObserver, execute, type RunContext } from "../src/execute";
 import { executeExport } from "../src/export";
@@ -266,6 +271,86 @@ describe("run command (5.1, 5.2)", () => {
     }
   });
 
+  it("releases the run lock when the baseline checkpoint fails", async () => {
+    const h = harness();
+    try {
+      const emit = h.context.emit;
+      let runId: string | null = null;
+      h.context.emit = (payload) => {
+        if (payload.event === "run.created") {
+          runId = String(payload.runId);
+          // Occupy the models path with a file so the baseline model write fails
+          // before any request is submitted.
+          writeFileSync(h.store.paths(runId).modelsDir, "not a directory");
+        }
+        emit(payload);
+      };
+
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(1);
+      if (runId === null) throw new Error("no run was created");
+      // The single-writer lock must not be stranded by the failed checkpoint.
+      const lock = h.store.acquireLock(runId);
+      lock.release();
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("surfaces a marker write failure as a run error without submitting", async () => {
+    const h = harness();
+    try {
+      let providerCalls = 0;
+      h.context.provider = async () => {
+        providerCalls += 1;
+        return success("B");
+      };
+      const emit = h.context.emit;
+      h.context.emit = (payload) => {
+        if (payload.event === "run.created") {
+          // Occupy the marker path with a directory so the atomic rename fails.
+          mkdirSync(h.store.paths(String(payload.runId)).inflightFile);
+        }
+        emit(payload);
+      };
+
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(1);
+      expect(providerCalls).toBe(0);
+      expect(h.events.some((event) => event.event === "error")).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("awaits the final checkpoint before emitting run.finished", async () => {
+    const h = harness();
+    try {
+      let durableStates: string[] = [];
+      let durableLifecycle: string | null = null;
+      const emit = h.context.emit;
+      h.context.emit = (payload) => {
+        if (payload.event === "run.finished") {
+          const runId = String(payload.runId);
+          durableStates = h.store
+            .readModelRecords(runId)
+            .flatMap((file) => file.evaluations)
+            .flatMap((evaluation) => evaluation.outcomes)
+            .map((outcome) => outcome.state);
+          durableLifecycle = h.store.readManifest(runId).lifecycle.state;
+        }
+        emit(payload);
+      };
+
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(0);
+      expect(durableStates).toEqual(["settled", "settled", "settled", "settled"]);
+      expect(durableLifecycle).toBe("completed");
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("exposes engine controls to an observer and treats a user stop as interrupted", async () => {
     // The provider waits for the abort signal, so the engine is still running
     // when the observer's stop request arrives — the real TUI quit path.
@@ -349,6 +434,65 @@ describe("run command (5.1, 5.2)", () => {
       const resumed = await execute({ mode: "resume", selector: { runId } }, h.context);
       expect(resumed.exitCode).toBe(1);
       expect(h.events.some((event) => event.kind === "DatasetChangedError")).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+describe("abortable loading (3.2)", () => {
+  it("aborts during dataset loading without creating a run", async () => {
+    const h = harness();
+    try {
+      const controller = new AbortController();
+      h.context.signal = controller.signal;
+      const promise = execute({ mode: "run", set: "demo" }, h.context);
+      // Abort before the async dataset read can complete: the signal is checked
+      // around the read and before the run directory is created.
+      controller.abort();
+      const result = await promise;
+      expect(result.exitCode).toBe(130);
+      expect(h.store.listRunIds()).toEqual([]);
+      expect(h.events.filter((event) => event.event === "run.created")).toHaveLength(0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("aborts a hanging capability fetch without creating a run", async () => {
+    const h = harness();
+    h.context.skipPreflight = false;
+    h.context.apiKey = "test-only-key";
+    const controller = new AbortController();
+    h.context.signal = controller.signal;
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const promise = execute({ mode: "run", set: "demo" }, h.context);
+      setTimeout(() => controller.abort(), 10);
+      const result = await promise;
+      expect(result.exitCode).toBe(130);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(h.store.listRunIds()).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
+  it("aborts a continuation before its child run is created", async () => {
+    const h = harness();
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const runId = lastRunId(h);
+      const controller = new AbortController();
+      controller.abort();
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        { ...h.context, signal: controller.signal },
+      );
+      expect(result.exitCode).toBe(130);
+      expect(h.store.listRunIds()).toEqual([runId]);
     } finally {
       h.cleanup();
     }
@@ -469,6 +613,121 @@ describe("resume (5.3)", () => {
       expect(childAttempt?.finishedAt).not.toBeNull();
       expect(childAttempt?.startedAt).not.toBe(startedAttempt.startedAt);
       expect(alphaEvaluation?.attempts).toHaveLength(2); // fixture 0 and fixture 1
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("classifies a marked submission without a durable terminal outcome as indeterminate", async () => {
+    const h = harness();
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const runId = lastRunId(h);
+
+      // Reproduce a crash after the marker write but before the outcome
+      // checkpoint: fixture 0 is still pending and the marker records that its
+      // request was submitted.
+      const modelPath = join(h.store.paths(runId).modelsDir, "alpha.json");
+      const alpha = JSON.parse(readFileSync(modelPath, "utf8")) as {
+        evaluations: { outcomes: Record<string, unknown>[] }[];
+      };
+      const evaluation = alpha.evaluations[0];
+      const first = evaluation?.outcomes[0];
+      if (evaluation === undefined || first === undefined) {
+        throw new Error("model file has no evaluation outcome");
+      }
+      evaluation.outcomes = [
+        {
+          ...first,
+          state: "pending",
+          kind: null,
+          responseText: null,
+          parsedAnswer: null,
+          requestLatencyMs: null,
+          totalFixtureTimeMs: null,
+          indeterminate: false,
+          failure: null,
+        },
+      ];
+      writeFileSync(modelPath, JSON.stringify(alpha));
+
+      const marker = new InflightMarkerWriter({
+        file: h.store.paths(runId).inflightFile,
+        runId,
+        now: () => T0,
+      });
+      await marker.record({
+        evaluationId: "alpha::default",
+        fixtureId: "0",
+        attemptNumber: 1,
+        submittedAt: new Date(T0).toISOString(),
+      });
+
+      h.context.provider = answerWith("B");
+      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(result.exitCode).toBe(0);
+
+      const disclosure = h.events.find((event) => event.event === "run.indeterminate-disclosure");
+      expect(disclosure?.indeterminateCount).toBe(1);
+      expect(h.stderr.join("")).toContain("unknown upstream completion");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not disclose a marked attempt whose durable attempt is a classified failure", async () => {
+    const h = harness();
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const runId = lastRunId(h);
+
+      // Reproduce a crash during retry backoff: the durable attempt records a
+      // classified rate-limit failure, the outcome is still pending, and the
+      // marker file has not been rewritten since the attempt finished. The
+      // request's completion is known, so resume must not call it unknown.
+      const modelPath = join(h.store.paths(runId).modelsDir, "alpha.json");
+      const alpha = JSON.parse(readFileSync(modelPath, "utf8")) as {
+        evaluations: {
+          outcomes: Record<string, unknown>[];
+          attempts: Record<string, unknown>[];
+        }[];
+      };
+      const evaluation = alpha.evaluations[0];
+      const outcome = evaluation?.outcomes.find((entry) => entry.fixtureId === "0");
+      const attempt = evaluation?.attempts.find(
+        (entry) => entry.fixtureId === "0" && entry.attemptNumber === 1,
+      );
+      if (evaluation === undefined || outcome === undefined || attempt === undefined) {
+        throw new Error("model file has no fixture 0 records");
+      }
+      attempt.state = "failed";
+      attempt.failure = {
+        category: "rate_limit",
+        message: "too many requests",
+        httpStatus: 429,
+        retryAfterMs: null,
+      };
+      evaluation.outcomes = [
+        { ...outcome, state: "pending", kind: null, indeterminate: false, failure: null },
+      ];
+      writeFileSync(modelPath, JSON.stringify(alpha));
+
+      const marker = new InflightMarkerWriter({
+        file: h.store.paths(runId).inflightFile,
+        runId,
+        now: () => T0,
+      });
+      await marker.record({
+        evaluationId: "alpha::default",
+        fixtureId: "0",
+        attemptNumber: 1,
+        submittedAt: new Date(T0).toISOString(),
+      });
+
+      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(result.exitCode).toBe(0);
+      expect(h.events.some((event) => event.event === "run.indeterminate-disclosure")).toBe(false);
+      expect(h.stderr.join("")).not.toContain("unknown upstream completion");
     } finally {
       h.cleanup();
     }

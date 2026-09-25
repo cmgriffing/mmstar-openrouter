@@ -29,12 +29,33 @@ interface EngineEventBase {
 export type CooldownReason = "rate_limit" | "request_cap";
 export type StopReason = "user" | "signal" | "error";
 
+/**
+ * One planned evaluation as announced on `run.started`. `fixtures` is the
+ * execution's actual work-item count for that evaluation, which is smaller than
+ * the dataset total for scoped recovery runs, so a progress denominator is
+ * correct from the first frame.
+ */
+export interface RunStartedEvaluation {
+  evaluationId: string;
+  modelAlias: string;
+  openRouterId: string;
+  reasoningMode: ReasoningMode;
+  rateLimitGroup: string;
+  fixtures: number;
+}
+
 export type EngineEvent =
   | (EngineEventBase & {
       type: "run.started";
       runId: string;
       totalEvaluations: number;
       totalFixtures: number;
+      /**
+       * Additive (version 1): every planned evaluation with its scoped fixture
+       * count, so a renderer can seed all rows before the first attempt.
+       * Consumers from earlier versions can ignore it.
+       */
+      evaluations?: readonly RunStartedEvaluation[];
     })
   | (EngineEventBase & {
       type: "evaluation.started";

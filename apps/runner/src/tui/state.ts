@@ -194,7 +194,17 @@ export function completedCount(state: RunnerViewState): number {
 }
 
 /** Total planned work items (evaluation × fixture). */
+/**
+ * Total planned work items. Once rows exist, the sum of their per-evaluation
+ * fixture totals is authoritative: a scoped recovery run schedules different
+ * fixtures for different evaluations, so `evaluations x fixtures` would
+ * overcount. Before rows exist (legacy producers), fall back to the product of
+ * the totals the event provided.
+ */
 export function totalWork(state: RunnerViewState): number {
+  if (state.rows.length > 0) {
+    return state.rows.reduce((sum, row) => sum + row.total, 0);
+  }
   return state.totalEvaluations * state.totalFixtures;
 }
 
@@ -384,6 +394,24 @@ export function applyEngineEvent(state: RunnerViewState, event: EngineEvent): Ru
         startedAtMs: atMs ?? stamped.startedAtMs,
         totalEvaluations: event.totalEvaluations,
         totalFixtures: event.totalFixtures,
+        // Additive descriptors let every planned row render from the first
+        // frame as [WAIT] with its own fixture denominator. Producers from
+        // earlier versions omit them, so existing rows are kept unchanged.
+        rows:
+          event.evaluations === undefined
+            ? stamped.rows
+            : event.evaluations.map((evaluation) => ({
+                evaluationId: evaluation.evaluationId,
+                modelAlias: evaluation.modelAlias,
+                openRouterId: evaluation.openRouterId,
+                reasoningMode: evaluation.reasoningMode,
+                group: evaluation.rateLimitGroup,
+                actualProvider: null,
+                total: evaluation.fixtures,
+                counts: emptyCounts(),
+                attempts: 0,
+                inFlight: 0,
+              })),
       };
 
     case "evaluation.started": {
@@ -402,7 +430,14 @@ export function applyEngineEvent(state: RunnerViewState, event: EngineEvent): Ru
       };
       return {
         ...stamped,
-        rows: [...stamped.rows.filter((entry) => entry.evaluationId !== event.evaluationId), row],
+        // Merge in place so seeded plan order stays stable; only an unseen
+        // evaluation (legacy producers) is appended.
+        rows:
+          existing === undefined
+            ? [...stamped.rows, row]
+            : stamped.rows.map((entry) =>
+                entry.evaluationId === event.evaluationId ? row : entry,
+              ),
       };
     }
 

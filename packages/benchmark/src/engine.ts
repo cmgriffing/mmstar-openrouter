@@ -90,6 +90,15 @@ export type CompletionProvider = (
   options: { timeoutMs: number; signal: AbortSignal },
 ) => Promise<ProviderResult<NormalizedCompletion>>;
 
+/** Payload handed to `beforeSubmitAttempt` immediately before a provider call. */
+export interface BeforeSubmitAttempt {
+  evaluationId: string;
+  fixtureId: string;
+  attemptNumber: number;
+  /** ISO-8601 timestamp the attempt was submitted at (same clock as the event). */
+  submittedAt: string;
+}
+
 /** Injected time source. `sleep` must resolve early when `signal` aborts. */
 export interface EngineClock {
   now(): number;
@@ -127,6 +136,12 @@ export interface BenchmarkEngineOptions {
   random?: () => number;
   sink?: EngineEventSink;
   scorer?: Scorer;
+  /**
+   * Awaited after `attempt.started` is emitted and before the provider call.
+   * The runner records the durable in-flight marker here; a rejection surfaces
+   * as a run error instead of submitting without a marker.
+   */
+  beforeSubmitAttempt?: (attempt: BeforeSubmitAttempt) => Promise<void> | void;
 }
 
 export interface EngineRunResult {
@@ -169,12 +184,16 @@ export class BenchmarkEngine {
   private readonly random: () => number;
   private readonly sink: EngineEventSink;
   private readonly scorer: Scorer;
+  private readonly beforeSubmitAttempt:
+    | ((attempt: BeforeSubmitAttempt) => Promise<void> | void)
+    | null;
   private readonly rateLimiter: RequestRateLimiter;
 
   private readonly groups: GroupState[] = [];
   private readonly groupByName = new Map<string, GroupState>();
   private readonly fixtureById = new Map<string, EngineFixture>();
   private readonly allItems: WorkItem[] = [];
+  private readonly evaluationItemCounts = new Map<string, number>();
   private readonly activeGroups = new Set<string>();
   private readonly cooldownUntil = new Map<string, number>();
   private readonly cooldownAnnounced = new Set<string>();
@@ -189,6 +208,8 @@ export class BenchmarkEngine {
   private finished = false;
   private paused = false;
   private stopping = false;
+  /** First item-level failure that escaped the settle path; rethrown by `run()`. */
+  private itemError: unknown = null;
   private haltReason: FailureRecord | null = null;
   private controlWaiter: (() => void) | null = null;
   private wakeController: AbortController | null = null;
@@ -204,6 +225,7 @@ export class BenchmarkEngine {
     this.random = options.random ?? Math.random;
     this.sink = options.sink ?? (() => {});
     this.scorer = options.scorer ?? createOptionScorer();
+    this.beforeSubmitAttempt = options.beforeSubmitAttempt ?? null;
     this.rateLimiter = new RequestRateLimiter(
       this.execution.maxRequestsPerMinute ?? Number.POSITIVE_INFINITY,
       () => this.clock.now(),
@@ -242,6 +264,10 @@ export class BenchmarkEngine {
         };
         group.queue.push(item);
         this.allItems.push(item);
+        this.evaluationItemCounts.set(
+          evaluation.evaluationId,
+          (this.evaluationItemCounts.get(evaluation.evaluationId) ?? 0) + 1,
+        );
       }
     }
   }
@@ -312,6 +338,14 @@ export class BenchmarkEngine {
       runId: this.runId,
       totalEvaluations: this.evaluations.length,
       totalFixtures: this.fixtures.length,
+      evaluations: this.evaluations.map((evaluation) => ({
+        evaluationId: evaluation.evaluationId,
+        modelAlias: evaluation.modelAlias,
+        openRouterId: evaluation.openRouterId,
+        reasoningMode: evaluation.reasoningMode,
+        rateLimitGroup: evaluation.rateLimitGroup,
+        fixtures: this.evaluationItemCounts.get(evaluation.evaluationId) ?? 0,
+      })),
     });
 
     while (true) {
@@ -321,10 +355,21 @@ export class BenchmarkEngine {
       }
 
       if (this.inFlight.size > 0) {
-        await Promise.race([...this.inFlight]);
+        try {
+          await Promise.race([...this.inFlight]);
+        } catch (error) {
+          // An item failed outside the settle path (for example the runner's
+          // submission hook rejected). Stop scheduling, cancel the remaining
+          // in-flight requests, and drain them before rejecting: the caller
+          // must never flush or release the run lock while work is live.
+          if (this.itemError === null) this.itemError = error;
+          this.stop("error");
+          await Promise.allSettled([...this.inFlight]);
+        }
         continue;
       }
 
+      if (this.itemError !== null) break;
       if (this.completedItems === this.allItems.length) break;
       if (this.stopping || this.haltReason !== null) break;
       if (this.paused) {
@@ -346,6 +391,9 @@ export class BenchmarkEngine {
           : "failed";
     this.runState = state;
     this.finished = true;
+    // An item error is surfaced instead of `run.finished`: the run did not
+    // reach a normal terminal state, and the caller reports the failure.
+    if (this.itemError !== null) throw this.itemError;
     this.emit({ type: "run.finished", runId: this.runId, state });
     return {
       runId: this.runId,
@@ -448,6 +496,23 @@ export class BenchmarkEngine {
     this.controllers.set(item, controller);
     attempt.state = "submitted";
     attempt.submittedAt = this.iso(startedAtMs);
+
+    // The submission marker must be durable before the provider call: register
+    // the controller first so a stop during the marker write still aborts this
+    // request instead of letting it slip through afterwards.
+    try {
+      if (this.beforeSubmitAttempt !== null) {
+        await this.beforeSubmitAttempt({
+          evaluationId: evaluation.evaluationId,
+          fixtureId: fixture.fixtureId,
+          attemptNumber,
+          submittedAt: this.iso(startedAtMs),
+        });
+      }
+    } catch (error) {
+      this.controllers.delete(item);
+      throw error;
+    }
 
     let result: ProviderResult<NormalizedCompletion>;
     try {

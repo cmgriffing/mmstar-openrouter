@@ -35,7 +35,7 @@ import { executeExport } from "../src/export";
 import { executeValidate } from "../src/validate";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
-const DATASET_PATH = join(REPO_ROOT, "MMStar.tsv");
+const DATASET_PATH = join(REPO_ROOT, "apps", "runner", "MMStar.tsv");
 const T0 = Date.parse("2026-09-25T00:00:00.000Z");
 
 const MODELS = {

@@ -11,12 +11,12 @@
     "build": "bun build ./src/cli.ts --target=bun --outdir=dist",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src scripts",
-    "test": "vitest run && bun test ./src/tui/render.bun.tsx",
+    "test": "vitest run && bun test ./src/tui/render.bun.tsx ./src/tui/pty.bun.ts",
     "validate": "bun run src/cli.ts validate",
-    "benchmark": "bun run src/cli.ts benchmark",
-    "resume": "bun run src/cli.ts resume",
-    "retry-failed": "bun run src/cli.ts retry-failed",
-    "restart": "bun run src/cli.ts restart",
+    "benchmark": "bun run src/index.tsx benchmark",
+    "resume": "bun run src/index.tsx resume",
+    "retry-failed": "bun run src/index.tsx retry-failed",
+    "restart": "bun run src/index.tsx restart",
     "export": "bun run src/cli.ts export"
   },
   "dependencies": {

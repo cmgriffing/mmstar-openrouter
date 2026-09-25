@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import committedSchema from "../../../mmstar.config.schema.json";
+import committedSchema from "../../../apps/runner/mmstar.config.schema.json";
 import { buildConfigJsonSchema, generateConfigSchemaJson } from "./schema";
 
 describe("generated config schema", () => {

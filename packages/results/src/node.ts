@@ -1,5 +1,7 @@
 export * from "./atomic";
+export * from "./checkpoint";
 export * from "./errors";
+export * from "./inflight";
 export * from "./lineage";
 export * from "./paths";
 export * from "./publication/images";

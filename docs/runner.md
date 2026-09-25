@@ -2,9 +2,11 @@
 
 `apps/runner` is the operator interface: it loads configuration and the committed
 dataset, freezes an evaluation plan, and executes it through the headless engine in
-`packages/benchmark`. Every command writes one JSON object per line to stdout (plain,
-machine-readable, ANSI-free) and human-readable diagnostics to stderr, so the same
-commands work headlessly and under the TUI added in chunks 6–7.
+`packages/benchmark`. `benchmark`, `resume`, `retry-failed`, and `restart` open the
+interactive TUI when stdout is a terminal; when stdout is piped or `--plain` is given
+they write one JSON object per line (plain, machine-readable, ANSI-free) instead.
+`validate` and `export` are always plain. Human-readable diagnostics go to stderr in
+every mode.
 
 ```
 mmstar <command> [options]
@@ -25,9 +27,13 @@ TUI graceful quit).
 
 ## Terminal UI
 
-`bun run src/index.tsx <command>` (or `pnpm --filter @mmstar/runner dev -- <command>`)
-runs the same commands as the plain CLI but renders typed engine events in an
-OpenTUI React screen instead of NDJSON. The header shows run identity, progress and an
+`pnpm benchmark --set <set>`, `pnpm resume --latest`, `pnpm retry-failed --latest`, and
+`pnpm restart --latest` open the interactive monitor by default: the root scripts bypass
+Turbo and forward their arguments straight to `src/index.tsx`, so Turbo can never pipe or
+multiplex the child's stdout (which would silently select the plain path) or compete with
+the full-screen renderer. `bun run src/index.tsx <command>` and
+`pnpm --filter @mmstar/runner dev -- <command>` remain equivalent direct entries.
+The header shows run identity, progress and an
 elapsed/remaining estimate, terminal outcome counts, cooldowns and retry countdowns,
 and a live metrics block: provisional/final markers, scored and total-selected
 accuracy with explicit denominators, coverage, category breakdown, latency
@@ -37,10 +43,30 @@ shows its rate-limit group, observed provider, attempts, and status token, and t
 activity pane lists failures, wrong answers, and control events.
 
 ```bash
-pnpm --filter @mmstar/runner dev -- benchmark --set smoke
+pnpm --filter @mmstar/runner dev -- benchmark --set testing
 pnpm --filter @mmstar/runner demo         # deterministic mock run, no credentials
 pnpm --filter @mmstar/runner smoke        # render briefly, then exit (PTY check)
 ```
+
+## Operator smoke run (paid)
+
+The automated suites never submit a real provider request. To exercise the live path
+deliberately, run the paid smoke from `apps/runner`, whose `mmstar.config.json` defines
+the `testing` set for `stealth/space-bunny-alpha` against the full committed dataset:
+
+```bash
+cd apps/runner
+export OPENROUTER_API_KEY=...     # environment only; never write it to config or artifacts
+pnpm benchmark --set testing
+```
+
+Expected: the TUI opens and every planned row appears immediately as `[WAIT] 0/1500`, rows
+show in-flight request counts while requests are outstanding, and the process exits by
+itself when the run settles (`--hold` keeps the final frame until `q`). An interrupted run
+is continued with `pnpm resume --latest`, which reissues pending/cancelled work and prints
+the indeterminate double-charge warning when a submitted request lacks a durable outcome.
+Executing this run is an operator action — it submits paid requests and is intentionally
+outside `pnpm check`.
 
 Keyboard:
 
@@ -66,14 +92,28 @@ Statuses use text tokens (`[RUN]`, `[COOL]`, `[WAIT]`, `[DONE]`, `[FAIL]`) so th
 never depend on color; narrow terminals drop the provider prefix, shorten columns and
 the metrics block, and hide panes rather than overflowing.
 
+Exit and quit semantics:
+
+- The TUI exits when the run settles: pending checkpoints are flushed, a brief final
+  frame is shown, the terminal is restored, and `mmstar: run <id> <state>` is printed.
+  `--hold` keeps the final frame until `q`; `--exit-on-finish` is accepted and behaves
+  identically to the default.
+- `q`, Ctrl-C, and SIGINT are graceful stops in every phase. Before `run.created` they
+  abort the dataset read and capability preflight, create no run, and exit `130`. While
+  requests are in flight they stop scheduling and cancel in-flight attempts (recorded
+  `cancelled` and checkpointed); after the run settles they exit through the normal
+  final-flush path. A second interrupt force-exits immediately after restoring the
+  terminal.
+- The process signal handler stays registered through the post-finish wait, so a signal
+  after the run completed still restores the terminal before exit.
+
 `--demo` drives the real engine with a deterministic mock provider (scripted
 cooldown, retry, and permanent failure) and exits when the run finishes; `--hold`
-keeps the final frame until `q`. Quitting (`q`, Ctrl-C, or SIGINT) is a graceful stop:
-no new requests start, in-flight attempts are aborted and recorded as `cancelled`,
-checkpoints are written, the terminal is restored, and the run ID plus final state are
-printed. When stdout is not a TTY, or `--plain` is passed, the entry point never
-starts a renderer: it runs the same engine through the plain CLI (or emits demo
-engine events as NDJSON) with the same exit codes and no terminal control sequences.
+keeps the final frame until `q`. `--latency <ms>` overrides the demo request latency
+for slow-request/quit PTY checks. When stdout is not a TTY, or `--plain` is passed, the
+entry point never starts a renderer: it runs the same engine through the plain CLI (or
+emits demo engine events as NDJSON) with the same exit codes and no terminal control
+sequences.
 
 ## Run directory layout
 
@@ -120,20 +160,41 @@ publication in place. See `docs/publication.md` for the layout, schema, and view
 - **Atomic writes.** Every file is written to a uniquely named temp file in the same
   directory, fsynced, then renamed over the target. A crash always leaves either the old
   or the new complete file — never a partial manifest.
-- **Checkpoints.** Model files are written before the manifest, after attempt starts,
-  after terminal outcomes, and at run end. If a crash lands between the two writes, the
-  model files are newer than the manifest.
+- **Checkpoints.** Persistence is two-tier. Before every provider submission the engine
+  invokes `beforeSubmitAttempt`, and the runner awaits a small `inflight.json` marker
+  listing the attempts awaiting a response, written through the async atomic writer with
+  writes serialized, so a concurrent submission can never be overwritten by an older
+  snapshot. Everything else — attempts, retries, terminal outcomes, and the manifest — is
+  coalesced by a `CheckpointWriter`: at most one write in flight, intermediate states
+  collapsed to the latest snapshot, a constant 1 s flush interval, and an awaited flush
+  on stop, finish, and signal before the final state is reported or the lock is released.
+  Model files are written before the manifest, and flushes use `fs/promises` write +
+  fsync + rename + directory fsync, so file I/O does not block the render/scheduling
+  loop. A hard `SIGKILL` can lose up to ~1 s of settled outcomes (resume reissues them,
+  paid and deterministic); a submitted request is never lost silently, because its marker
+  is durable before the provider call.
 - **Reconciliation.** `resume`/`retry-failed`/`restart` reconstruct progress from the
   validated model files and treat the manifest as identity/plan only. A fixture that is
   present in the plan but absent from the durable records counts as pending work, and a
   fixture that appears in two model files is a hard conflict, not a silent deduplication.
+  A marked attempt with no durable terminal outcome is classified indeterminate — counted
+  in the resume double-charge warning — even when the persisted outcome is `pending`. The
+  exception is an attempt whose durable record already carries a classified failure
+  (rate limit, server error, invalid request, content filter, auth, configuration): that
+  round-trip finished, so a stale marker is not an unknown completion. A missing
+  `inflight.json` (runs created before this marker existed) is treated as empty, so
+  legacy runs reconcile exactly as before.
 
 ## Continuation semantics
 
 - **`resume`** reissues work that was never attempted (`pending`), was cancelled, or was
   interrupted (`indeterminate`). It prints a warning that an interrupted request has
   unknown upstream completion and can be charged again. Exhausted request failures are
-  *not* resumed — that is `retry-failed`'s job.
+  *not* resumed — that is `retry-failed`'s job. Operator-cancelled work is reissued
+  without that warning: the abort was local and deliberate, and the engine records it as
+  `cancelled` rather than `indeterminate`. Cancellation does not prove the upstream
+  provider skipped the request, so treat a stopped run's in-flight requests as possibly
+  charged once already.
 - **`retry-failed`** creates a `recovery` child run linked by `lineage.parentRunId`. It
   selects only unresolved request failures (timeouts, network, rate limits, selected
   5xx, invalid requests, unknown transport failures), never scored responses, and never

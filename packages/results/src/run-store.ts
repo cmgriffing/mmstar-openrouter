@@ -20,6 +20,7 @@ import { readdirSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import {
+  atomicWriteFile,
   atomicWriteFileSync,
   createExclusiveFileSync,
   isErrno,
@@ -32,6 +33,7 @@ import {
   RunNotFoundError,
   RunVersionError,
 } from "./errors";
+import { type InflightAttempt, readInflightMarker } from "./inflight";
 import { formatRunId, isValidRunId, parseRunId } from "./paths";
 import {
   type EvaluationRecord,
@@ -42,11 +44,13 @@ import {
   type RunManifest,
   type RunState,
 } from "./records";
+import { serializeJson } from "./serialize";
 
 export const MANIFEST_FILE = "manifest.json";
 export const MODELS_DIR = "models";
 export const RAW_DIR = "raw";
 export const LOCK_FILE = "run.lock";
+export const INFLIGHT_FILE = "inflight.json";
 export const MODEL_FILE_SUFFIX = ".json";
 export const LOCK_VERSION = 1;
 
@@ -76,6 +80,8 @@ export interface RunPaths {
   modelsDir: string;
   rawDir: string;
   lockFile: string;
+  /** In-flight submission marker; absent when nothing is awaiting a response. */
+  inflightFile: string;
 }
 
 export interface CreateRunInput {
@@ -141,6 +147,7 @@ export class RunStore {
       modelsDir: join(dir, MODELS_DIR),
       rawDir: join(dir, RAW_DIR),
       lockFile: join(dir, LOCK_FILE),
+      inflightFile: join(dir, INFLIGHT_FILE),
     };
   }
 
@@ -197,6 +204,52 @@ export class RunStore {
       this.writeModelRecord(input.manifest.runId, file);
     }
     this.writeManifest(input.manifest.runId, input.manifest);
+  }
+
+  /**
+   * Async counterpart of `writeCheckpoint`: file I/O runs on the threadpool so
+   * a checkpoint flush never blocks the scheduling/render loop. Ordering and
+   * validation are identical to the synchronous path.
+   */
+  async writeCheckpointAsync(input: WriteModelRecordsInput): Promise<void> {
+    const paths = this.paths(input.manifest.runId);
+    for (const [relativePath, body] of Object.entries(input.rawFiles ?? {})) {
+      await atomicWriteFile(join(paths.dir, assertSafeRelativePath(relativePath)), body);
+    }
+    for (const file of input.files) {
+      await this.writeModelRecordAsync(input.manifest.runId, file);
+    }
+    await this.writeManifestAsync(input.manifest.runId, input.manifest);
+  }
+
+  /** Async counterpart of `writeManifest`. */
+  async writeManifestAsync(runId: string, manifest: RunManifest): Promise<void> {
+    const paths = this.paths(runId);
+    if (manifest.runId !== runId) {
+      throw new RunConflictError(
+        runId,
+        `manifest runId ${manifest.runId} does not match run directory ${runId}`,
+      );
+    }
+    await atomicWriteFile(paths.manifestFile, serializeJson(manifest));
+  }
+
+  /** Async counterpart of `writeModelRecord`. */
+  async writeModelRecordAsync(runId: string, file: ModelRecordFile): Promise<void> {
+    const paths = this.paths(runId);
+    if (file.runId !== runId) {
+      throw new RunConflictError(
+        runId,
+        `model record runId ${file.runId} does not match run directory ${runId}`,
+      );
+    }
+    if (file.recordVersion !== MODEL_RECORD_VERSION) {
+      throw new RunVersionError(runId, file.recordVersion);
+    }
+    await atomicWriteFile(
+      join(paths.modelsDir, modelFileName(file.modelAlias)),
+      serializeJson(file),
+    );
   }
 
   /** Read and validate a manifest. Throws `RunCorruptError`/`RunVersionError`. */
@@ -383,6 +436,13 @@ export interface ReconciledRun {
    * model file, so file presence alone is not proof of progress.
    */
   missingOutcomes: string[];
+  /**
+   * Submissions recorded in the in-flight marker before the provider call.
+   * A marked attempt without a durable terminal outcome proves the request was
+   * sent, so recovery must classify it indeterminate instead of silently
+   * reissuing it. Empty for runs without a marker (all legacy runs).
+   */
+  inflightAttempts: InflightAttempt[];
 }
 
 /**
@@ -400,7 +460,15 @@ export function reconcileRun(store: RunStore, runId: string): ReconciledRun {
   const present = new Set(files.map((file) => file.modelAlias));
   const missingModelFiles = uniqueAliases(manifest).filter((alias) => !present.has(alias));
   const missingOutcomes = findMissingOutcomes(manifest, evaluations);
-  return { manifest, files, evaluations, missingModelFiles, missingOutcomes };
+  const inflight = readInflightMarker(runId, store.paths(runId).inflightFile);
+  return {
+    manifest,
+    files,
+    evaluations,
+    missingModelFiles,
+    missingOutcomes,
+    inflightAttempts: inflight?.attempts ?? [],
+  };
 }
 
 function findMissingOutcomes(
@@ -630,9 +698,7 @@ export function latestUpdatedAt(
 }
 
 /** Serialize with a trailing newline and stable 2-space indentation. */
-export function serializeJson(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
+export { serializeJson } from "./serialize";
 
 function listJsonFiles(dir: string): string[] {
   try {

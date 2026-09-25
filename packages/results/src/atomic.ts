@@ -16,6 +16,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
+import { type FileHandle, mkdir, open, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export interface AtomicWriteOptions {
@@ -65,6 +66,49 @@ export function atomicWriteFileSync(
 
 let tempCounter = 0;
 
+/**
+ * Promise-based counterpart of `atomicWriteFileSync`: the write runs on the
+ * threadpool and never blocks the event loop. Same temp-file + rename
+ * protocol, so readers still never observe a partial file.
+ */
+export async function atomicWriteFile(
+  path: string,
+  data: string,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
+  const fsync = options.fsync ?? true;
+  const dir = dirname(path);
+  await mkdir(
+    dir,
+    options.mode === undefined ? { recursive: true } : { recursive: true, mode: options.mode },
+  );
+  const temp = `${path}.tmp-${process.pid}-${Date.now().toString(36)}-${tempCounter++}`;
+  let handle: FileHandle | null = null;
+  try {
+    handle = await open(temp, "w");
+    await handle.writeFile(data);
+    if (fsync) await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(temp, path);
+    if (fsync) await fsyncDirectoryAsync(dir);
+  } catch (error) {
+    if (handle !== null) {
+      try {
+        await handle.close();
+      } catch {
+        // The original error is what matters.
+      }
+    }
+    try {
+      await rm(temp, { force: true });
+    } catch {
+      // The temp file is best-effort cleanup; the original error is what matters.
+    }
+    throw error;
+  }
+}
+
 /** fsync a directory so a rename is durable; tolerated on filesystems that reject it. */
 function fsyncDirectory(dir: string): void {
   let fd: number | null = null;
@@ -79,6 +123,26 @@ function fsyncDirectory(dir: string): void {
     if (fd !== null) {
       try {
         closeSync(fd);
+      } catch {
+        // Ignore close failures on a best-effort durability step.
+      }
+    }
+  }
+}
+
+/** Async counterpart of `fsyncDirectory` with the same best-effort tolerance. */
+async function fsyncDirectoryAsync(dir: string): Promise<void> {
+  let handle: FileHandle | null = null;
+  try {
+    handle = await open(dir, "r");
+    await handle.sync();
+  } catch {
+    // See `fsyncDirectory`: unsupported on some volumes, and the file-level
+    // fsync still bounds the durability window.
+  } finally {
+    if (handle !== null) {
+      try {
+        await handle.close();
       } catch {
         // Ignore close failures on a best-effort durability step.
       }

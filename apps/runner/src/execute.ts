@@ -9,6 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   BenchmarkEngine,
@@ -42,11 +43,14 @@ import {
   type ModelRecordFile,
   type OutcomeRecord,
   type RunManifest,
-  type RunState,
 } from "@mmstar/results";
 import {
   buildModelFiles,
+  type CheckpointSnapshot,
+  CheckpointWriter,
   countProgress,
+  InflightMarkerWriter,
+  isKnownFailureCategory,
   isResumeCandidate,
   isRetryableFailureOutcome,
   outcomeIdentity,
@@ -76,6 +80,12 @@ export interface RunContext {
   apiKey: string | null;
   skipPreflight: boolean;
   force: boolean;
+  /**
+   * Optional cancellation for the pre-engine phase (dataset load and capability
+   * preflight). The TUI aborts this when quit is pressed before a run exists;
+   * aborting never creates a run directory and surfaces as exit code 130.
+   */
+  signal?: AbortSignal;
   now?: () => number;
   suffix?: () => string;
   stderr: { write: (text: string) => void };
@@ -133,6 +143,7 @@ export async function execute(request: RunRequest, context: RunContext): Promise
         return await runContinuation(request.mode, request.selector, context, store);
     }
   } catch (error) {
+    if (error instanceof RunAbortedError) return { exitCode: 130 };
     return reportError(error, context);
   }
 }
@@ -215,7 +226,7 @@ function selectorFrom(
 async function runFresh(set: string, context: RunContext, store: RunStore): Promise<CommandResult> {
   const config = loadConfig(context);
   const datasetPath = resolvePath(context.cwd, config.dataset.path);
-  const dataset = await loadDataset(datasetPath);
+  const dataset = await loadDataset(datasetPath, context.signal);
   const plan = buildPlan(config, set, dataset.fixtureIds, dataset.sha256);
   const runId = store.nextRunId(nowMs(context), nextSuffix(context));
   const timestamp = nowIso(context);
@@ -237,6 +248,7 @@ async function runFresh(set: string, context: RunContext, store: RunStore): Prom
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
 
+  throwIfAborted(context.signal);
   const evaluations = preflightEvaluations(manifest);
   store.createRun({ runId, manifest });
   context.emit({
@@ -270,7 +282,10 @@ async function runRestart(
   // A restart reuses the frozen capability snapshot and plan: it is a new
   // primary run of the same experiment, not a re-plan, so no live metadata
   // fetch is required and no setting can silently change.
-  const dataset = await loadDataset(resolvePath(context.cwd, source.plan.dataset.path));
+  const dataset = await loadDataset(
+    resolvePath(context.cwd, source.plan.dataset.path),
+    context.signal,
+  );
   if (dataset.sha256 !== source.plan.dataset.sha256) {
     throw new DatasetChangedError(source.plan.dataset.path);
   }
@@ -295,6 +310,7 @@ async function runRestart(
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
 
+  throwIfAborted(context.signal);
   const evaluations = preflightEvaluations(manifest);
   store.createRun({ runId, manifest });
   context.emit({
@@ -326,11 +342,15 @@ async function runContinuation(
   const config = loadConfig(context, source.configuration.source);
   verifyModelsAvailable(source, config);
 
-  const dataset = await loadDataset(resolvePath(context.cwd, source.plan.dataset.path));
+  const dataset = await loadDataset(
+    resolvePath(context.cwd, source.plan.dataset.path),
+    context.signal,
+  );
   if (dataset.sha256 !== source.plan.dataset.sha256) {
     throw new DatasetChangedError(source.plan.dataset.path);
   }
 
+  throwIfAborted(context.signal);
   const reconciled = reconcileRun(store, source.runId);
   const lineage = resolveLineage(store, source);
 
@@ -393,6 +413,7 @@ async function continueFromSource(
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
   const evaluations = preflightEvaluations(manifest);
+  throwIfAborted(context.signal);
   store.createRun({ runId, manifest });
 
   context.emit({
@@ -446,6 +467,35 @@ function selectWork(
     reconciled.evaluations.map((evaluation) => [evaluation.evaluationId, evaluation]),
   );
   const missing = new Set(reconciled.missingOutcomes);
+  // Submissions recorded before the provider call. A marked attempt without a
+  // durable terminal outcome proves the request was sent, so reissuing it can
+  // bill twice. A durable classified failure for that exact attempt proves the
+  // exchange finished, so a stale marker entry must not be reported as an
+  // unknown completion while the outcome is still pending.
+  const marked = new Map(
+    reconciled.inflightAttempts.map((attempt) => [
+      outcomeIdentity(attempt.evaluationId, attempt.fixtureId),
+      attempt,
+    ]),
+  );
+  const knownCompletions = new Set(
+    reconciled.evaluations.flatMap((evaluation) =>
+      evaluation.attempts
+        .filter(
+          (attempt) => attempt.failure !== null && isKnownFailureCategory(attempt.failure.category),
+        )
+        .map(
+          (attempt) =>
+            `${outcomeIdentity(attempt.evaluationId, attempt.fixtureId)}::${attempt.attemptNumber}`,
+        ),
+    ),
+  );
+  /** A marked submission whose completion is still unknown (not a durable failure). */
+  const hasUnknownSubmission = (identity: string): boolean => {
+    const attempt = marked.get(identity);
+    if (attempt === undefined) return false;
+    return !knownCompletions.has(`${identity}::${attempt.attemptNumber}`);
+  };
   const selection = new Map<string, string[]>();
   let candidates = 0;
   let indeterminateCount = 0;
@@ -460,6 +510,7 @@ function selectWork(
       // definition: a crash can drop one outcome without losing its model file.
       if (missing.has(identity)) {
         candidates += 1;
+        if (mode === "resume" && hasUnknownSubmission(identity)) indeterminateCount += 1;
         const list = selection.get(planEvaluation.evaluationId) ?? [];
         list.push(fixtureId);
         selection.set(planEvaluation.evaluationId, list);
@@ -483,7 +534,13 @@ function selectWork(
       if (!isCandidate) continue;
 
       candidates += 1;
-      if (mode === "resume" && outcome.state === "indeterminate") indeterminateCount += 1;
+      if (
+        mode === "resume" &&
+        (outcome.state === "indeterminate" ||
+          (outcome.state === "pending" && hasUnknownSubmission(identity)))
+      ) {
+        indeterminateCount += 1;
+      }
       const list = selection.get(planEvaluation.evaluationId) ?? [];
       list.push(fixtureId);
       selection.set(planEvaluation.evaluationId, list);
@@ -530,17 +587,43 @@ async function executeManifest(input: ExecuteManifestInput): Promise<CommandResu
   const lock = store.acquireLock(input.lockRunId ?? manifest.runId, { force: context.force });
   const client = new OpenRouterClient({ transport: fetchTransport, apiKey: context.apiKey });
 
-  const engine = new BenchmarkEngine({
+  // Two-tier persistence (design D2): every submission is marked durably before
+  // the provider call so recovery never silently reissues an interrupted
+  // request; bulk outcome state is coalesced into periodic async writes so
+  // neither the scheduler nor the renderer waits on an fsync.
+  const marker = new InflightMarkerWriter({
+    file: store.paths(manifest.runId).inflightFile,
+    runId: manifest.runId,
+    now: () => nowMs(context),
+  });
+  let currentManifest: RunManifest = manifest;
+  let engine: BenchmarkEngine | null = null;
+  const writer = new CheckpointWriter({
+    snapshot: () =>
+      engine === null ? null : buildSnapshot(currentManifest, input, engine.getRecords()),
+    write: (snapshot) => store.writeCheckpointAsync(snapshot),
+    onError: (error) => {
+      context.stderr.write(
+        `mmstar: checkpoint write failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    },
+  });
+
+  engine = new BenchmarkEngine({
     runId: manifest.runId,
     evaluations: input.evaluations,
     fixtures: input.fixtures,
     execution: manifest.configuration.execution,
     provider: context.provider ?? ((payload, control) => client.chatCompletion(payload, control)),
+    beforeSubmitAttempt: async (attempt) => {
+      await marker.record({ ...attempt });
+    },
     sink: (event) => {
       context.engineEvents?.(event);
       context.emit({ event: "engine", runId: manifest.runId, ...event });
-      if (event.type === "attempt.started" || event.type === "outcome.settled") {
-        checkpoint(store, manifest, input, engine.getRecords());
+      if (event.type === "attempt.finished" || event.type === "outcome.settled") {
+        marker.markFinished(event.evaluationId, event.fixtureId);
+        writer.markDirty();
       }
     },
   });
@@ -549,35 +632,74 @@ async function executeManifest(input: ExecuteManifestInput): Promise<CommandResu
   const stop = (reason: "user" | "signal" | "error"): void => {
     if (reason !== "error") interrupted = true;
     context.emit({ event: "engine.stop-requested", runId: manifest.runId, reason });
-    engine.stop(reason);
+    engine?.stop(reason);
   };
   const onSignal = (): void => stop("signal");
   const disposeSignals = registerSignalHandlers(onSignal);
   context.observeEngine?.(engine, {
-    pause: () => engine.pause(),
-    resume: () => engine.resume(),
+    pause: () => engine?.pause(),
+    resume: () => engine?.resume(),
     stop: (reason) => stop(reason),
   });
 
-  checkpoint(store, manifest, input, engine.getRecords());
+  // Baseline synchronous checkpoint: a complete snapshot exists before the
+  // first request even though per-event writes are gone.
+  try {
+    checkpoint(store, manifest, input, engine.getRecords());
+  } catch (error) {
+    // No request was submitted, so there is nothing durable to keep: dispose the
+    // writer and release the lock instead of stranding the run directory.
+    try {
+      await writer.dispose();
+    } finally {
+      lock.release();
+    }
+    throw error;
+  }
 
-  let result: EngineRunResult;
+  let result: EngineRunResult | null = null;
+  let runError: unknown = null;
   try {
     result = await engine.run();
+  } catch (error) {
+    runError = error;
   } finally {
     disposeSignals();
   }
 
-  const finalState = result.state;
-  const updatedAt = nowIso(context);
-  const finalManifest: RunManifest = {
-    ...manifest,
-    updatedAt,
-    lifecycle: { state: finalState, updatedAt },
-  };
-  checkpoint(store, finalManifest, input, engine.getRecords(), finalState);
-  lock.release();
+  let flushError: unknown = null;
+  try {
+    if (result !== null) {
+      const updatedAt = nowIso(context);
+      currentManifest = {
+        ...manifest,
+        updatedAt,
+        lifecycle: { state: result.state, updatedAt },
+      };
+    }
+    // The final flush is awaited before `run.finished` is emitted or the lock is
+    // released; a marker is deleted once nothing is in flight.
+    await writer.flush();
+    await marker.persist();
+  } catch (error) {
+    flushError = error;
+  } finally {
+    try {
+      await writer.dispose();
+    } catch {
+      // Disposal must not mask the run error or block the lock release.
+    }
+    lock.release();
+  }
 
+  if (runError !== null) throw runError;
+  if (flushError !== null) throw flushError;
+  if (result === null) {
+    throw new Error("engine run finished without a result");
+  }
+
+  const finalState = result.state;
+  const finalManifest = currentManifest;
   const merged =
     input.kind === "primary"
       ? engine.getRecords()
@@ -607,14 +729,12 @@ async function executeManifest(input: ExecuteManifestInput): Promise<CommandResu
   return { exitCode: 1 };
 }
 
-function checkpoint(
-  store: RunStore,
+/** Build one durable snapshot from the current manifest and engine records. */
+function buildSnapshot(
   manifest: RunManifest,
   input: ExecuteManifestInput,
   evaluations: readonly EvaluationRecord[],
-  _state?: RunState,
-): void {
-  const updatedAt = manifest.updatedAt;
+): CheckpointSnapshot {
   const merged =
     input.kind === "primary"
       ? evaluations
@@ -623,8 +743,16 @@ function checkpoint(
           input.previousFiles?.flatMap((file) => file.evaluations) ?? [],
           evaluations,
         );
-  const files = buildModelFiles({ ...manifest, updatedAt }, merged, updatedAt);
-  store.writeCheckpoint({ manifest: { ...manifest, updatedAt }, files });
+  return { manifest, files: buildModelFiles(manifest, merged, manifest.updatedAt) };
+}
+
+function checkpoint(
+  store: RunStore,
+  manifest: RunManifest,
+  input: ExecuteManifestInput,
+  evaluations: readonly EvaluationRecord[],
+): void {
+  store.writeCheckpoint(buildSnapshot(manifest, input, evaluations));
 }
 
 // ---------------------------------------------------------------------------
@@ -653,16 +781,22 @@ export interface LoadedDataset {
   sha256: string;
 }
 
-export async function loadDataset(path: string): Promise<LoadedDataset> {
+export async function loadDataset(path: string, signal?: AbortSignal): Promise<LoadedDataset> {
   let text: string;
   try {
-    text = readFileSync(path, "utf8");
-  } catch {
+    text = await readFileAbortable(path, signal);
+  } catch (error) {
+    if (error instanceof RunAbortedError) throw error;
     throw new ValidationError(path, [
       { path: "", code: "missing_file", message: "cannot read dataset file" },
     ]);
   }
+  // The TSV parse itself is synchronous and cannot observe the signal mid-way;
+  // it is the one non-interruptible moment, so the signal is checked before and
+  // after it.
+  throwIfAborted(signal);
   const parsed = parseDatasetTsv(text);
+  throwIfAborted(signal);
   return {
     records: parsed.fixtures,
     fixtureIds: parsed.fixtures.map((fixture) => fixture.fixtureId),
@@ -817,8 +951,13 @@ async function resolveCapabilities(
     return assumeCapabilities(plan);
   }
 
+  throwIfAborted(context.signal);
   const client = new OpenRouterClient({ transport: fetchTransport, apiKey: context.apiKey });
-  const catalog = await client.fetchModelCatalog();
+  const catalog = await raceWithAbort(
+    client.fetchModelCatalog(context.signal === undefined ? {} : { signal: context.signal }),
+    context.signal,
+  );
+  throwIfAborted(context.signal);
   if (!catalog.ok) throw new ProviderHaltError(catalog.failure);
   const result = preflightPlan(plan, catalog.value);
   if (!result.ok) throw new ValidationError("capability preflight", result.issues);
@@ -950,6 +1089,49 @@ function registerSignalHandlers(onSignal: () => void): () => void {
     process.off("SIGINT", handler);
     process.off("SIGTERM", handler);
   };
+}
+
+/**
+ * Pre-engine cancellation: dataset loading or capability preflight was aborted
+ * before a run directory existed. Command paths translate this to exit 130.
+ */
+export class RunAbortedError extends Error {
+  constructor() {
+    super("aborted before the run was created");
+    this.name = "RunAbortedError";
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new RunAbortedError();
+}
+
+/**
+ * Await `promise`, rejecting as soon as `signal` aborts. The underlying
+ * operation is left running; callers abort on the way to process exit.
+ */
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return Promise.reject(new RunAbortedError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new RunAbortedError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** `fs.promises.readFile` with the pre-engine cancellation signal applied. */
+async function readFileAbortable(path: string, signal: AbortSignal | undefined): Promise<string> {
+  return await raceWithAbort(readFile(path, "utf8"), signal);
 }
 
 export class DatasetChangedError extends Error {
