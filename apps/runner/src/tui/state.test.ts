@@ -18,6 +18,7 @@ import {
   RunViewStore,
   rowStatus,
   selectedActivityEntry,
+  totalWork,
 } from "./state";
 
 const AT = "2026-09-23T00:00:00.000Z";
@@ -188,6 +189,131 @@ describe("RunViewStore engine-state reduction", () => {
       total: 4,
       attempts: 0,
       inFlight: 0,
+    });
+  });
+
+  it("seeds a row for every planned evaluation from run.started", () => {
+    const planned = [
+      {
+        evaluationId: "alpha::high",
+        modelAlias: "alpha",
+        openRouterId: "vendor/alpha",
+        reasoningMode: "high" as const,
+        rateLimitGroup: "g1",
+        fixtures: 3,
+      },
+      {
+        evaluationId: "beta::default",
+        modelAlias: "beta",
+        openRouterId: "vendor/beta",
+        reasoningMode: "default" as const,
+        rateLimitGroup: "g2",
+        fixtures: 2,
+      },
+    ];
+    const state = applyEngineEvent(
+      initialViewState(),
+      event("run.started", {
+        runId: "run-1",
+        totalEvaluations: 2,
+        totalFixtures: 5,
+        evaluations: planned,
+      }),
+    );
+
+    expect(state.rows.map((row) => row.evaluationId)).toEqual(["alpha::high", "beta::default"]);
+    expect(state.rows.map((row) => row.total)).toEqual([3, 2]);
+    expect(state.rows.every((row) => row.attempts === 0 && row.inFlight === 0)).toBe(true);
+    // A freshly seeded row reads as [WAIT] until work starts.
+    const first = state.rows[0];
+    if (first === undefined) throw new Error("no seeded row");
+    expect(rowStatus(state, first, Date.parse(AT))).toBe("queued");
+  });
+
+  it("sums per-evaluation fixture totals so scoped runs do not overcount", () => {
+    const state = applyEngineEvent(
+      initialViewState(),
+      event("run.started", {
+        runId: "run-1",
+        totalEvaluations: 2,
+        totalFixtures: 5,
+        evaluations: [
+          {
+            evaluationId: "alpha::default",
+            modelAlias: "alpha",
+            openRouterId: "vendor/alpha",
+            reasoningMode: "default" as const,
+            rateLimitGroup: "g1",
+            fixtures: 3,
+          },
+          {
+            evaluationId: "beta::default",
+            modelAlias: "beta",
+            openRouterId: "vendor/beta",
+            reasoningMode: "default" as const,
+            rateLimitGroup: "g2",
+            fixtures: 2,
+          },
+        ],
+      }),
+    );
+
+    // 3 + 2, not totalEvaluations (2) x totalFixtures (5).
+    expect(totalWork(state)).toBe(5);
+  });
+
+  it("merges evaluation.started into the seeded row without resetting progress", () => {
+    const seeded = applyEngineEvent(
+      initialViewState(),
+      event("run.started", {
+        runId: "run-1",
+        totalEvaluations: 2,
+        totalFixtures: 5,
+        evaluations: [
+          {
+            evaluationId: "alpha::high",
+            modelAlias: "alpha",
+            openRouterId: "vendor/alpha",
+            reasoningMode: "high" as const,
+            rateLimitGroup: "g1",
+            fixtures: 3,
+          },
+          {
+            evaluationId: "beta::default",
+            modelAlias: "beta",
+            openRouterId: "vendor/beta",
+            reasoningMode: "default" as const,
+            rateLimitGroup: "g2",
+            fixtures: 2,
+          },
+        ],
+      }),
+    );
+    let state = applyEngineEvent(
+      seeded,
+      event("attempt.started", {
+        evaluationId: "alpha::high",
+        fixtureId: "0",
+        attemptNumber: 1,
+      }),
+    );
+    state = applyEngineEvent(
+      state,
+      event("evaluation.started", {
+        evaluationId: "alpha::high",
+        modelAlias: "alpha",
+        openRouterId: "vendor/alpha",
+        reasoningMode: "high",
+        rateLimitGroup: "g1",
+      }),
+    );
+
+    expect(state.rows).toHaveLength(2);
+    expect(state.rows[0]).toMatchObject({
+      evaluationId: "alpha::high",
+      total: 3,
+      attempts: 1,
+      inFlight: 1,
     });
   });
 

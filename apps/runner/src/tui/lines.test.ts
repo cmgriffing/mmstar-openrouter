@@ -293,6 +293,55 @@ describe("model row lines", () => {
     expect(line).toContain("provider-x");
   });
 
+  it("shows the in-flight request count while attempts are outstanding", () => {
+    let state = stateWithRun();
+    state = applyEngineEvent(
+      state,
+      event("attempt.started", {
+        evaluationId: "alpha::high",
+        fixtureId: "0",
+        attemptNumber: 1,
+      }),
+    );
+    state = applyEngineEvent(
+      state,
+      event("attempt.started", {
+        evaluationId: "alpha::high",
+        fixtureId: "1",
+        attemptNumber: 1,
+      }),
+    );
+    const row = firstRow(state);
+
+    const wide = modelRowLine({
+      row,
+      state,
+      nowMs: Date.parse(AT),
+      width: 110,
+      selected: false,
+    });
+    const compact = compactModelRowLine(row, state, Date.parse(AT), 60);
+
+    expect(wide).toContain("[RUN]");
+    expect(wide).toContain("flight 2");
+    expect(compact).toContain("fl2");
+    expect(wide.length).toBeLessThanOrEqual(110);
+    expect(compact.length).toBeLessThanOrEqual(60);
+  });
+
+  it("omits the in-flight token when nothing is outstanding", () => {
+    const state = stateWithRun();
+    const wide = modelRowLine({
+      row: firstRow(state),
+      state,
+      nowMs: Date.parse(AT),
+      width: 110,
+      selected: false,
+    });
+
+    expect(wide).not.toContain("flight");
+  });
+
   it("never exceeds the requested width", () => {
     const state = stateWithRun();
     for (const width of [40, 60, 80]) {

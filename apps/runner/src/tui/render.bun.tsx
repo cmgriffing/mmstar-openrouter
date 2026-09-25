@@ -183,6 +183,71 @@ describe("RunnerTui rendering", () => {
     expect(frame).toContain("fixture 3");
   });
 
+  test("seeds every planned row and shows in-flight counts on frame", async () => {
+    const store = new RunViewStore();
+    store.applyEngineEvent(
+      event("run.started", {
+        runId: "run-seeded",
+        totalEvaluations: 3,
+        totalFixtures: 7,
+        evaluations: [
+          {
+            evaluationId: "alpha::high",
+            modelAlias: "alpha",
+            openRouterId: "vendor/alpha",
+            reasoningMode: "high",
+            rateLimitGroup: "group-a",
+            fixtures: 2,
+          },
+          {
+            evaluationId: "beta::default",
+            modelAlias: "beta",
+            openRouterId: "vendor/beta",
+            reasoningMode: "default",
+            rateLimitGroup: "group-b",
+            fixtures: 2,
+          },
+          {
+            evaluationId: "gamma::default",
+            modelAlias: "gamma",
+            openRouterId: "vendor/gamma",
+            reasoningMode: "default",
+            rateLimitGroup: "group-c",
+            fixtures: 3,
+          },
+        ],
+      }),
+    );
+    store.applyEngineEvent(
+      event("attempt.started", {
+        evaluationId: "alpha::high",
+        fixtureId: "0",
+        attemptNumber: 1,
+      }),
+    );
+    store.applyEngineEvent(
+      event("attempt.started", {
+        evaluationId: "beta::default",
+        fixtureId: "1",
+        attemptNumber: 1,
+      }),
+    );
+
+    const setup = await renderApp(store, 110, 32);
+    const frame = setup.captureCharFrame();
+    const alphaLine = linesWith(frame, "alpha")[0] ?? "";
+    const betaLine = linesWith(frame, "beta")[0] ?? "";
+    const gammaLine = linesWith(frame, "gamma")[0] ?? "";
+
+    expect(alphaLine).toContain("[RUN]");
+    expect(alphaLine).toContain("flight 1");
+    expect(betaLine).toContain("[RUN]");
+    expect(betaLine).toContain("flight 1");
+    // An evaluation with nothing in flight is still visible with its own total.
+    expect(gammaLine).toContain("[WAIT]");
+    expect(gammaLine).toContain("0/3");
+  });
+
   test("moves the visible focus marker with arrow keys", async () => {
     const setup = await renderApp(seededStore(), 100, 30);
     const before = setup.captureCharFrame();

@@ -175,6 +175,7 @@ export function modelRowLine(input: ModelRowInput): string {
   const progress = `${formatProgressBar(done, row.total, 8)} ${done}/${row.total}`;
   const attempts = `x${row.attempts}`;
   const parts = [marker, status, alias, effort, group, provider, progress, attempts];
+  if (row.inFlight > 0) parts.push(`flight ${row.inFlight}`);
   return truncate(parts.join(" "), width);
 }
 
@@ -195,6 +196,7 @@ export function compactModelRowLine(
     `${done}/${row.total}`,
     `x${row.attempts}`,
   ];
+  if (row.inFlight > 0) parts.push(`fl${row.inFlight}`);
   if (cooldown !== null) parts.push(`(${formatCountdown(cooldown.untilMs - nowMs)})`);
   if (row.actualProvider !== null) parts.push(row.actualProvider);
   return truncate(parts.join(" "), width);

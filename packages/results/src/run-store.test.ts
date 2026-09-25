@@ -7,6 +7,7 @@ import {
   buildModelFiles,
   countProgress,
   formatRunId,
+  InflightMarkerWriter,
   isProcessAlive,
   modelFileName,
   outcomeIdentity,
@@ -143,6 +144,51 @@ describe("run creation and checkpointing", () => {
     store.writeModelRecord(RUN_ID, base);
     store.writeModelRecord(RUN_ID, { ...base, modelAlias: "b" });
     expect(() => reconcileRun(store, RUN_ID)).toThrow(RunConflictError);
+  });
+});
+
+describe("in-flight markers and reconciliation", () => {
+  it("reports marked submissions next to the persisted outcomes", async () => {
+    const manifest = makeManifest();
+    store.createRun({ runId: RUN_ID, manifest });
+    const evaluation = makeEvaluation();
+    const outcome = evaluation.outcomes[0];
+    if (outcome === undefined) throw new Error("fixture missing");
+    store.writeCheckpoint({
+      manifest,
+      files: buildModelFiles(
+        manifest,
+        [{ ...evaluation, outcomes: [{ ...outcome, state: "pending", kind: null }] }],
+        manifest.updatedAt,
+      ),
+    });
+    const writer = new InflightMarkerWriter({
+      file: store.paths(RUN_ID).inflightFile,
+      runId: RUN_ID,
+      now: () => T0,
+    });
+    await writer.record({
+      evaluationId: "a::default",
+      fixtureId: "0",
+      attemptNumber: 1,
+      submittedAt: new Date(T0).toISOString(),
+    });
+
+    const reconciled = reconcileRun(store, RUN_ID);
+    expect(reconciled.inflightAttempts).toEqual([
+      {
+        evaluationId: "a::default",
+        fixtureId: "0",
+        attemptNumber: 1,
+        submittedAt: new Date(T0).toISOString(),
+      },
+    ]);
+    expect(reconciled.evaluations[0]?.outcomes[0]?.state).toBe("pending");
+  });
+
+  it("treats a legacy run without a marker as having no in-flight work", () => {
+    store.createRun({ runId: RUN_ID, manifest: makeManifest() });
+    expect(reconcileRun(store, RUN_ID).inflightAttempts).toEqual([]);
   });
 });
 

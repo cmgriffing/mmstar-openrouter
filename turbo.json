@@ -19,18 +19,6 @@
     "validate": {
       "cache": false
     },
-    "benchmark": {
-      "cache": false
-    },
-    "resume": {
-      "cache": false
-    },
-    "retry-failed": {
-      "cache": false
-    },
-    "restart": {
-      "cache": false
-    },
     "export": {
       "cache": false
     }

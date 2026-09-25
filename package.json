@@ -17,10 +17,10 @@
     "format": "biome format --write .",
     "schema": "pnpm --filter @mmstar/config schema",
     "validate": "turbo run validate",
-    "benchmark": "turbo run benchmark",
-    "resume": "turbo run resume",
-    "retry-failed": "turbo run retry-failed",
-    "restart": "turbo run restart",
+    "benchmark": "pnpm --filter @mmstar/runner benchmark",
+    "resume": "pnpm --filter @mmstar/runner resume",
+    "retry-failed": "pnpm --filter @mmstar/runner retry-failed",
+    "restart": "pnpm --filter @mmstar/runner restart",
     "export": "turbo run export"
   },
   "devDependencies": {

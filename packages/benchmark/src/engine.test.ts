@@ -3,6 +3,7 @@ import type { FailureCategory, FailureRecord } from "@mmstar/results";
 import { describe, expect, it } from "vitest";
 import {
   BenchmarkEngine,
+  type BenchmarkEngineOptions,
   type CompletionProvider,
   type EngineClock,
   type EngineFixture,
@@ -202,6 +203,7 @@ function harness(options: {
   respond: (call: RecordedCall, index: number) => ProviderResult<NormalizedCompletion>;
   latencyMs?: number;
   random?: () => number;
+  beforeSubmitAttempt?: BenchmarkEngineOptions["beforeSubmitAttempt"];
 }): Harness {
   const clock = new TestClock();
   const events: EngineEvent[] = [];
@@ -218,6 +220,9 @@ function harness(options: {
     provider,
     clock,
     ...(options.random === undefined ? {} : { random: options.random }),
+    ...(options.beforeSubmitAttempt === undefined
+      ? {}
+      : { beforeSubmitAttempt: options.beforeSubmitAttempt }),
     sink: (event) => events.push(event),
   });
   return { engine, clock, calls, events, run: () => driveRun(clock, engine.run()) };
@@ -408,6 +413,39 @@ describe("BenchmarkEngine events", () => {
     });
   });
 
+  it("lists planned evaluations with scoped fixture counts on run.started", async () => {
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a"), evaluation("beta", "group-b")],
+      fixtures: [{ ...fixture("0"), evaluationIds: ["alpha::default"] }, fixture("1")],
+      respond: () => ok("A"),
+    });
+
+    await h.run();
+
+    const started = h.events.find((event) => event.type === "run.started");
+    if (started?.type !== "run.started") throw new Error("no run.started event");
+    expect(started.totalEvaluations).toBe(2);
+    expect(started.totalFixtures).toBe(2);
+    expect(started.evaluations).toEqual([
+      {
+        evaluationId: "alpha::default",
+        modelAlias: "alpha",
+        openRouterId: "vendor/alpha",
+        reasoningMode: "default",
+        rateLimitGroup: "group-a",
+        fixtures: 2,
+      },
+      {
+        evaluationId: "beta::default",
+        modelAlias: "beta",
+        openRouterId: "vendor/beta",
+        reasoningMode: "default",
+        rateLimitGroup: "group-b",
+        fixtures: 1,
+      },
+    ]);
+  });
+
   it("reports no observed provider when an attempt never reached a provider", async () => {
     const h = harness({
       evaluations: [evaluation("alpha", "group-a")],
@@ -461,6 +499,86 @@ describe("BenchmarkEngine events", () => {
       expectedAnswer: "B",
     });
     expect(h.engine.getFixtureDetail("missing")).toBeNull();
+  });
+
+  it("awaits beforeSubmitAttempt after attempt.started and before the provider", async () => {
+    const order: string[] = [];
+    let eventsAtHook: string[] = [];
+    let h: Harness;
+    h = harness({
+      evaluations: [evaluation("alpha", "group-a")],
+      fixtures: [fixture("0")],
+      respond: () => {
+        order.push("provider");
+        return ok("A");
+      },
+      beforeSubmitAttempt: async (attempt) => {
+        order.push("hook");
+        eventsAtHook = h.events.map((event) => event.type);
+        expect(attempt).toEqual({
+          evaluationId: "alpha::default",
+          fixtureId: "0",
+          attemptNumber: 1,
+          submittedAt: new Date(T0).toISOString(),
+        });
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("completed");
+    expect(order).toEqual(["hook", "provider"]);
+    expect(eventsAtHook).toContain("attempt.started");
+    expect(eventsAtHook).toContain("evaluation.started");
+    expect(eventsAtHook).not.toContain("attempt.finished");
+  });
+
+  it("fails the run and skips the provider when the submission hook rejects", async () => {
+    let called = false;
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a")],
+      fixtures: [fixture("0")],
+      respond: () => {
+        called = true;
+        return ok("A");
+      },
+      beforeSubmitAttempt: async () => {
+        throw new Error("marker write failed");
+      },
+    });
+
+    await expect(h.run()).rejects.toThrow("marker write failed");
+    expect(called).toBe(false);
+  });
+
+  it("stops and drains every in-flight group when one item's submission hook rejects", async () => {
+    const h = harness({
+      evaluations: [evaluation("alpha", "group-a"), evaluation("beta", "group-b")],
+      fixtures: [fixture("0")],
+      // Both groups launch together and stay in flight until the clock advances,
+      // so the alpha rejection lands while beta's request is open.
+      latencyMs: 10_000,
+      respond: () => ok("A"),
+      beforeSubmitAttempt: async (attempt) => {
+        if (attempt.evaluationId.startsWith("alpha::")) {
+          throw new Error("marker write failed");
+        }
+      },
+    });
+
+    await expect(h.run()).rejects.toThrow("marker write failed");
+    // Alpha never submitted (its marker failed). Beta's marker was recorded and
+    // its provider call aborted by the drain: no request may still be live once
+    // run() rejects, or the caller would release the run lock while the engine
+    // is still writing.
+    expect(h.calls).toHaveLength(1);
+    const cancelled = h.events.find(
+      (event): event is Extract<EngineEvent, { type: "attempt.finished" }> =>
+        event.type === "attempt.finished" && event.evaluationId.startsWith("beta::"),
+    );
+    expect(cancelled?.state).toBe("cancelled");
+    expect(h.events.some((e) => e.type === "engine.stopping" && e.reason === "error")).toBe(true);
+    expect(h.engine.state).toBe("stopped");
   });
 });
 

@@ -10,7 +10,7 @@ import {
   toPromptFixture,
 } from "./dataset";
 
-const DATASET_URL = new URL("../../../MMStar.tsv", import.meta.url);
+const DATASET_URL = new URL("../../../apps/runner/MMStar.tsv", import.meta.url);
 /** Frozen source hash of the committed dataset; a change here must be deliberate. */
 const DATASET_SHA256 = "38a99f4a33743665e6990961a9a0072b07f7ac6a74d1555b43c4f82145377cb4";
 

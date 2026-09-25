@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import exampleConfig from "../../../mmstar.config.example.json";
+import exampleConfig from "../../../apps/runner/mmstar.config.example.json";
 import type { MmstarConfig } from "./index";
 import {
   CONFIG_VERSION,

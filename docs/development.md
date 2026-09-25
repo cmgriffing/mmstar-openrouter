@@ -35,28 +35,29 @@ Use `pnpm install --frozen-lockfile` in CI or when verifying a clean install.
 
 ## Commands
 
-Benchmark lifecycle commands are stubs in the workspace-foundation chunk and are wired
-to real behavior in later chunks:
+Benchmark lifecycle commands are implemented. The four run commands open the TUI when
+stdout is a terminal and fall back to NDJSON when piped or given `--plain`:
 
 ```bash
-pnpm validate -- --set <name>        # validate config and expand a frozen plan
-pnpm benchmark -- --set <name>       # start a primary run
-pnpm resume -- --latest              # continue pending/interrupted work
-pnpm retry-failed -- --latest        # linked recovery run for request failures
-pnpm restart -- --latest             # new primary run with the original selection
+pnpm validate --set <name>           # validate config and expand a frozen plan
+pnpm benchmark --set <name>          # start a primary run (TUI on a TTY)
+pnpm resume --latest                 # continue pending/interrupted work
+pnpm retry-failed --latest           # linked recovery run for request failures
+pnpm restart --latest                # new primary run with the original selection
 pnpm export                          # publish JSON results as a validated SQLite artifact
 ```
 
-They are Turbo tasks with `"cache": false`: every invocation executes, even if the
-inputs are unchanged, because these commands can submit paid requests or write run
-artifacts. `pnpm exec turbo run benchmark --dry=json` shows `resolvedTaskDefinition.cache`
-as `false`.
+`validate` and `export` are Turbo tasks with `"cache": false`. The four run commands
+intentionally bypass Turbo: their root scripts invoke
+`pnpm --filter @mmstar/runner <command>` with the user's arguments forwarded verbatim
+(for example `pnpm benchmark --set testing`), because Turbo would otherwise pipe or
+multiplex the child's stdout and silently flip the TUI to the plain path.
 
 The interactive TUI runs from source:
 
 ```bash
 pnpm --filter @mmstar/runner dev          # interactive monitor for a runner command
-pnpm --filter @mmstar/runner dev -- benchmark --set smoke
+pnpm --filter @mmstar/runner dev -- benchmark --set testing
 pnpm --filter @mmstar/runner demo         # deterministic mock run, no credentials
 pnpm --filter @mmstar/runner smoke        # render briefly, then exit (PTY check)
 ```
