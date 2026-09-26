@@ -7,7 +7,12 @@ import type {
 } from "@mmstar/results";
 import ComparisonExplorer from "../components/ComparisonExplorer";
 import Base from "../layouts/Base.astro";
-import { formatCount, formatDateTime, formatPercent, shortHash } from "../lib/format";
+import {
+  formatCount,
+  formatDateTime,
+  formatPercent,
+  shortHash,
+} from "../lib/format";
 import {
   categoryCell,
   categoryMatrix,
@@ -20,7 +25,10 @@ import {
   readComparisonFilters,
   runKindLabel,
 } from "../lib/view";
-import { getPublicationRepository, PublicationUnavailableError } from "../server/publication";
+import {
+  getPublicationRepository,
+  PublicationUnavailableError,
+} from "../server/publication";
 
 export const prerender = false;
 
@@ -62,7 +70,9 @@ const comparisonFilters = readComparisonFilters(Astro.url.searchParams, {
   evaluationIds: new Set(comparisons.map((row) => row.evaluationId)),
 });
 const selectedIds =
-  comparisonFilters.values.models === null ? null : new Set(comparisonFilters.values.models);
+  comparisonFilters.values.models === null
+    ? null
+    : new Set(comparisonFilters.values.models);
 const selectedComparisons =
   selectedIds === null
     ? comparisons
@@ -81,15 +91,20 @@ const matrix = categoryMatrix(model?.categories ?? []);
 
 const totalSettled = comparisons.reduce((sum, row) => sum + row.settled, 0);
 const totalSelected = comparisons.reduce((sum, row) => sum + row.selected, 0);
-const publicationCoverage = totalSelected > 0 ? totalSettled / totalSelected : null;
+const publicationCoverage =
+  totalSelected > 0 ? totalSettled / totalSelected : null;
 const setNames = [...new Set(runs.map((run) => run.setName))];
-const setName = setNames.length === 1 ? setNames[0] : setNames.length === 0 ? "—" : "mixed";
-const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount ?? null;
+const setName =
+  setNames.length === 1 ? setNames[0] : setNames.length === 0 ? "—" : "mixed";
+const fixturesPerEvaluation =
+  comparisons[0]?.selected ?? runs[0]?.fixtureCount ?? null;
 ---
 
 <Base
   title="Comparisons · MMStar · OpenRouter"
-  headerMeta={model === null ? undefined : `publication-wide · exported ${formatDateTime(model.meta.createdAt)}`}
+  headerMeta={model === null
+    ? undefined
+    : `Updated: ${formatDateTime(model.meta.createdAt)}`}
 >
   {
     model === null ? (
@@ -97,106 +112,43 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
         <h1>Publication unavailable</h1>
         <p class="mono">{loadError}</p>
         <p>
-          Export a run with <code>mmstar export</code>, then sync it into the website assets
-          (<code>node scripts/sync-publication.mjs</code>) or deploy a build that includes a
-          publication.
+          Export a run with <code>mmstar export</code>, then sync it into the
+          website assets (<code>node scripts/sync-publication.mjs</code>) or
+          deploy a build that includes a publication.
         </p>
       </section>
     ) : (
       <>
         <section class="hero">
-          <p class="kicker">01 · Publication</p>
           <h1 class="hero-title">
             Image understanding, <em>measured</em>.
           </h1>
           <p class="hero-sub">
-            MMStar fixtures executed through OpenRouter, published as one immutable snapshot.
-            Accuracy is scored against the dataset answer; latency and cost come from the actual
-            attempts, and unknown values stay unknown.
+            MMStar fixtures executed through OpenRouter. Accuracy is scored
+            against the dataset answer. Latency and cost come from the actual
+            attempts.
           </p>
-          <dl class="stat-strip">
-            <div>
-              <dt>Set</dt>
-              <dd>{setName}</dd>
-            </div>
-            <div>
-              <dt>Evaluations</dt>
-              <dd>{formatCount(comparisons.length)}</dd>
-            </div>
-            <div>
-              <dt>Fixtures / evaluation</dt>
-              <dd>{formatCount(fixturesPerEvaluation)}</dd>
-            </div>
-            <div>
-              <dt>Coverage</dt>
-              <dd>{formatPercent(publicationCoverage)}</dd>
-            </div>
-            <div>
-              <dt>Exported</dt>
-              <dd>{formatDateTime(model.meta.createdAt)}</dd>
-            </div>
-          </dl>
         </section>
-
-        {ignoredNotices.length > 0 && (
-          <section class="notice" role="alert">
-            <h3>Ignored unknown filters</h3>
-            <ul>
-              {ignoredNotices.map((notice) => (
-                <li>{notice}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {issues.length > 0 && (
-          <section class="notice" role="alert">
-            <h3>Mixed experiment settings</h3>
-            <p>
-              The winning families do not share the same frozen settings, so aggregated
-              comparisons are not like-for-like.
-            </p>
-            <ul>
-              {issues.map((issue) => (
-                <li>
-                  {issue.field}: {issue.values.join(" vs ")}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {incompleteRuns.length > 0 && (
-          <section class="notice" role="alert">
-            <h3>Runs still incomplete</h3>
-            <p>
-              Results below use each evaluation's winning family; runs that never reached a
-              completed state are listed with their lifecycle state.
-            </p>
-            <ul>
-              {incompleteRuns.map((run) => (
-                <li>
-                  {shortHash(run.runId, 24)} · {runKindLabel(run.runKind)} · {run.lifecycleState}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
 
         <section class="section">
           <div class="section-head">
             <div>
-              <p class="kicker">02 · Comparisons</p>
               <h2>Model × effort</h2>
             </div>
             <p class="kicker" data-comparison-count>
-              {comparisonCountLabel(selectedComparisons.length, comparisons.length)}
+              {comparisonCountLabel(
+                selectedComparisons.length,
+                comparisons.length,
+              )}
             </p>
           </div>
           {comparisons.length === 0 ? (
             <div class="empty-panel">
               <h2>No evaluations in this publication</h2>
-              <p>The publication contains runs but no evaluation records to compare.</p>
+              <p>
+                The publication contains runs but no evaluation records to
+                compare.
+              </p>
             </div>
           ) : (
             <ComparisonExplorer
@@ -205,7 +157,10 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
               initialSelection={comparisonFilters.values.models}
               initialSort={comparisonFilters.values.sort}
               initialDir={comparisonFilters.values.dir}
-              initialAxes={{ x: comparisonFilters.values.x, y: comparisonFilters.values.y }}
+              initialAxes={{
+                x: comparisonFilters.values.x,
+                y: comparisonFilters.values.y,
+              }}
               initialCostScale={comparisonFilters.values.scale}
             />
           )}
@@ -214,7 +169,6 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
         <section class="section">
           <div class="section-head">
             <div>
-              <p class="kicker">03 · Categories</p>
               <h2>Accuracy by category</h2>
             </div>
             <p class="kicker">{matrix.names.length} categories</p>
@@ -226,9 +180,15 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
             </div>
           ) : (
             <>
-              <div class="empty-panel" data-matrix-empty hidden={!emptySelection}>
+              <div
+                class="empty-panel"
+                data-matrix-empty
+                hidden={!emptySelection}
+              >
                 <h2>No models selected</h2>
-                <p>Select at least one model above to see its category accuracy.</p>
+                <p>
+                  Select at least one model above to see its category accuracy.
+                </p>
               </div>
               <div
                 class="table-wrap"
@@ -239,7 +199,6 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
                 hidden={emptySelection}
               >
                 <table class="data-table matrix-table">
-                  <caption>Correct / settled within each category; "—" means nothing settled.</caption>
                   <thead>
                     <tr>
                       <th scope="col">Evaluation</th>
@@ -261,12 +220,18 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
                         {matrix.names.map((name) => (
                           <td>
                             <span class="cell-figure">
-                              {categoryCell(matrix.byEvaluation.get(row.evaluationId)?.get(name))}
+                              {categoryCell(
+                                matrix.byEvaluation
+                                  .get(row.evaluationId)
+                                  ?.get(name),
+                              )}
                             </span>
                           </td>
                         ))}
                         <td class="num matrix-overall">
-                          <span class="cell-figure">{formatPercent(row.scoredAccuracy)}</span>
+                          <span class="cell-figure">
+                            {formatPercent(row.scoredAccuracy)}
+                          </span>
                         </td>
                       </tr>
                     ))}
@@ -275,96 +240,6 @@ const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount 
               </div>
             </>
           )}
-        </section>
-
-        <section class="section">
-          <div class="section-head">
-            <div>
-              <p class="kicker">04 · Lineage</p>
-              <h2>Runs in this publication</h2>
-            </div>
-            <p class="kicker">newest first</p>
-          </div>
-          <div class="table-wrap" tabindex="0" role="region" aria-label="Run lineage">
-            <table class="data-table run-table">
-              <thead>
-                <tr>
-                  <th scope="col">Run</th>
-                  <th scope="col">Role</th>
-                  <th scope="col">State</th>
-                  <th scope="col">Created</th>
-                  <th scope="col" class="num">
-                    Fixtures
-                  </th>
-                  <th scope="col" class="num">
-                    Recovered
-                  </th>
-                  <th scope="col">Prompt / scorer</th>
-                  <th scope="col">Dataset</th>
-                  <th scope="col">Build</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr>
-                    <td data-label="Run">
-                      <span class="mono" title={run.runId}>
-                        {shortHash(run.runId, 22)}
-                      </span>
-                      {run.parentRunId !== null && (
-                        <span class="figure-sub" title={run.parentRunId}>
-                          parent {shortHash(run.parentRunId, 18)}
-                        </span>
-                      )}
-                    </td>
-                    <td data-label="Role">
-                      <span
-                        class={`badge ${run.runKind === "primary" ? "badge--neutral" : "badge--accent"}`}
-                      >
-                        {runKindLabel(run.runKind)}
-                      </span>
-                    </td>
-                    <td data-label="State">
-                      <span
-                        class={`badge ${run.lifecycleState === "completed" ? "badge--good" : "badge--warn"}`}
-                      >
-                        {run.lifecycleState}
-                      </span>
-                    </td>
-                    <td data-label="Created">
-                      <span class="mono">{formatDateTime(run.createdAt)}</span>
-                    </td>
-                    <td data-label="Fixtures" class="num">
-                      <span class="mono">{formatCount(run.fixtureCount)}</span>
-                    </td>
-                    <td data-label="Recovered" class="num">
-                      <span class="mono">{formatCount(run.recoveredFixtureCount)}</span>
-                    </td>
-                    <td data-label="Prompt / scorer">
-                      <span class="mono">
-                        v{run.promptVersion} / v{run.scorerVersion}
-                      </span>
-                    </td>
-                    <td data-label="Dataset">
-                      <span class="mono" title={run.datasetSha256}>
-                        {shortHash(run.datasetSha256)}
-                      </span>
-                    </td>
-                    <td data-label="Build">
-                      <span class={`badge ${run.codeDirty ? "badge--warn" : "badge--neutral"}`}>
-                        {run.codeDirty ? "dirty tree" : "clean"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p class="footnote">
-            Schema v{model.meta.schemaVersion ?? "?"}, exporter v{model.meta.exporterVersion ?? "?"}.
-            Original records stay immutable; each evaluation resolves to one winning family and
-            recovery children resolve into its effective outcomes.
-          </p>
         </section>
       </>
     )
