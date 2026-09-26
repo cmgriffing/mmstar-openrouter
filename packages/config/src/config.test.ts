@@ -131,6 +131,13 @@ describe("parseMmstarConfig", () => {
     });
     expect(issueKeys(base("openrouter/auto"))).toContain("models.a.openRouterId:dynamic_model_id");
     expect(issueKeys(base("openrouter/free"))).toContain("models.a.openRouterId:dynamic_model_id");
+    expect(issueKeys(base("vendor/model:free"))).toEqual([]);
+    expect(issueKeys(base("openrouter/auto:free"))).toContain(
+      "models.a.openRouterId:dynamic_model_id",
+    );
+    expect(issueKeys(base("vendor/model:free:free"))).toContain(
+      "models.a.openRouterId:invalid_model_id",
+    );
     expect(issueKeys(base("novendor"))).toContain("models.a.openRouterId:invalid_model_id");
   });
 

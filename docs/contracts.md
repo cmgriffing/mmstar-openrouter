@@ -95,7 +95,7 @@ runtime; `apps/runner/src/transport.ts` is the only `fetch` implementation.
 - Requests (`provider-request.ts`) carry one user message with the versioned instruction
   plus the question verbatim and the image as a `data:` URL. The expected answer is never
   part of the payload. Dynamic routers (`openrouter/auto`, `openrouter/free`) and
-  `:variant` suffixes are rejected again at this boundary. Provider routing maps to
+  Unsupported `:variant` suffixes (all except `:free`) are rejected again at this boundary. Provider routing maps to
   `only`, `order`, `ignore`, `allow_fallbacks`, and `sort`, with
   `require_parameters: true` always set.
 - Responses (`provider-response.ts`) normalize the reported model, the serving provider

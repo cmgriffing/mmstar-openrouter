@@ -3,17 +3,12 @@
  *
  * The request is built only from the frozen preflight decision and the
  * answer-free prompt projection. `model` is always the fixed OpenRouter ID from
- * the plan — dynamic router aliases and variant suffixes are rejected here as a
+ * the plan — dynamic router aliases and unsupported variant suffixes are rejected here as a
  * second line of defense after config validation. Provider routing preferences
  * are mapped to the upstream snake_case payload with `require_parameters: true`
  * always set.
  */
-import {
-  DYNAMIC_MODEL_IDS,
-  MODEL_ID_REGEX,
-  MODEL_VARIANT_SEPARATOR,
-  type ProviderRoutingConfig,
-} from "@mmstar/config";
+import { DYNAMIC_MODEL_IDS, MODEL_ID_REGEX, type ProviderRoutingConfig } from "@mmstar/config";
 import type { PromptPayload } from "./prompt";
 import type { PreflightEvaluation } from "./provider-preflight";
 
@@ -59,11 +54,10 @@ export interface ChatCompletionRequestPayload {
   provider: ProviderRoutingPayload;
 }
 
-/** True for concrete model IDs only: no dynamic routers, no variant suffixes. */
+/** True for concrete model IDs only: no dynamic routers; the :free suffix is allowed. */
 export function isFixedModelId(modelId: string): boolean {
   return (
-    !(DYNAMIC_MODEL_IDS as readonly string[]).includes(modelId) &&
-    !modelId.includes(MODEL_VARIANT_SEPARATOR) &&
+    !(DYNAMIC_MODEL_IDS as readonly string[]).includes(modelId.split(":")[0] ?? modelId) &&
     MODEL_ID_REGEX.test(modelId)
   );
 }
@@ -71,7 +65,7 @@ export function isFixedModelId(modelId: string): boolean {
 export function assertFixedModelId(modelId: string): void {
   if (!isFixedModelId(modelId)) {
     throw new ProviderRequestError(
-      `"${modelId}" is not a fixed model ID; dynamic routers and variant suffixes cannot be used for fixed-model comparisons`,
+      `"${modelId}" is not a fixed model ID; dynamic routers and unsupported variant suffixes cannot be used for fixed-model comparisons`,
     );
   }
 }

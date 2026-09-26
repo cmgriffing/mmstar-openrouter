@@ -27,6 +27,16 @@ function evaluation(overrides: Partial<PreflightEvaluation> = {}): PreflightEval
 }
 
 describe("buildChatCompletionRequest", () => {
+  it("preserves concrete free model IDs in requests", () => {
+    expect(
+      buildChatCompletionRequest({
+        evaluation: evaluation({ openRouterId: "qwen/qwen3.8-27b:free" }),
+        prompt,
+      }).model,
+    ).toBe("qwen/qwen3.8-27b:free");
+    expect(isFixedModelId("openrouter/auto:free")).toBe(false);
+    expect(isFixedModelId("vendor/model:free:free")).toBe(false);
+  });
   it("builds a multimodal user message from the answer-free prompt", () => {
     const request = buildChatCompletionRequest({ evaluation: evaluation(), prompt });
 

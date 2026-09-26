@@ -115,7 +115,8 @@ export function buildConfigJsonSchema(): Record<string, unknown> {
           openRouterId: {
             type: "string",
             pattern: MODEL_ID_REGEX.source,
-            description: 'Fixed OpenRouter model ID such as "vendor/model".',
+            description:
+              'Fixed OpenRouter model ID, optionally suffixed with :free, such as "vendor/model".',
           },
           reasoningModes: {
             type: "array",

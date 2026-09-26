@@ -113,8 +113,8 @@
       "properties": {
         "openRouterId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9~][A-Za-z0-9~._-]*\\/[A-Za-z0-9~][A-Za-z0-9~._-]*$",
-          "description": "Fixed OpenRouter model ID such as \"vendor/model\"."
+          "pattern": "^[A-Za-z0-9~][A-Za-z0-9~._-]*\\/[A-Za-z0-9~][A-Za-z0-9~._-]*(?::free)?$",
+          "description": "Fixed OpenRouter model ID, optionally suffixed with :free, such as \"vendor/model\"."
         },
         "reasoningModes": {
           "type": "array",

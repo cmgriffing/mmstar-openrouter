@@ -36,7 +36,7 @@ routing, and sets.
 
 | Field | Meaning |
 | --- | --- |
-| `openRouterId` | Fixed `vendor/model` ID. Dynamic routers (`openrouter/auto`, `openrouter/free`) and variant suffixes (`:nitro`, `:floor`, `:online`, `:thinking`) are rejected: a fixed-model comparison must not substitute models at request time. |
+| `openRouterId` | Fixed `vendor/model` ID, optionally with a `:free` suffix. Dynamic routers (`openrouter/auto`, `openrouter/free`) and variant suffixes (`:nitro`, `:floor`, `:online`, `:thinking`) are rejected: a fixed-model comparison must not substitute models at request time. |
 | `reasoningModes` | Ordered, unique modes; order determines evaluation order inside a set. |
 | `rateLimitGroup` | Required identifier shared by every alias limited by the same provider rate limit. One request is in flight per group at a time. |
 | `provider` | Optional routing restrictions (below). |

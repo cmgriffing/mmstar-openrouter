@@ -95,8 +95,9 @@ export const EXECUTION_DEFAULTS: ExecutionConfig = {
 
 /** Alias, set, and rate-limit-group names. */
 export const IDENTIFIER_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-/** Fixed OpenRouter model IDs: `vendor/model`, optionally with a `~` latest marker. */
-export const MODEL_ID_REGEX = /^[A-Za-z0-9~][A-Za-z0-9~._-]*\/[A-Za-z0-9~][A-Za-z0-9~._-]*$/;
+/** Fixed OpenRouter model IDs: `vendor/model`, optionally with a `~` latest marker or `:free` suffix. */
+export const MODEL_ID_REGEX =
+  /^[A-Za-z0-9~][A-Za-z0-9~._-]*\/[A-Za-z0-9~][A-Za-z0-9~._-]*(?::free)?$/;
 /** OpenRouter provider slugs. */
 export const PROVIDER_SLUG_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -451,7 +452,7 @@ function validateModelId(
     );
     return undefined;
   }
-  if ((DYNAMIC_MODEL_IDS as readonly string[]).includes(value)) {
+  if ((DYNAMIC_MODEL_IDS as readonly string[]).includes(value.split(":")[0] ?? value)) {
     pushIssue(
       issues,
       path,
@@ -460,7 +461,7 @@ function validateModelId(
     );
     return undefined;
   }
-  if (value.includes(MODEL_VARIANT_SEPARATOR)) {
+  if (value.includes(MODEL_VARIANT_SEPARATOR) && !value.endsWith(":free")) {
     pushIssue(
       issues,
       path,
@@ -555,7 +556,7 @@ function validateModels(
 
 function validateSets(
   value: unknown,
-  models: Record<string, ModelAliasConfig>,
+  models: Record<string, unknown>,
   issues: ValidationIssue[],
 ): Record<string, ModelSetConfig> {
   const sets: Record<string, ModelSetConfig> = {};
@@ -603,7 +604,7 @@ function validateSets(
         return;
       }
       seen.add(entry);
-      if (models[entry] === undefined) {
+      if (!Object.hasOwn(models, entry)) {
         pushIssue(
           issues,
           entryPath,
@@ -662,7 +663,7 @@ function validateConfigDocument(input: unknown, issues: ValidationIssue[]): Mmst
   config.dataset = validateDataset(input.dataset, issues);
   config.execution = validateExecution(input.execution, issues);
   config.models = validateModels(input.models, issues);
-  config.sets = validateSets(input.sets, config.models, issues);
+  config.sets = validateSets(input.sets, isObject(input.models) ? input.models : {}, issues);
 
   return config;
 }

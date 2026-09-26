@@ -231,6 +231,7 @@ async function runCommandTui(
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   const root = createRoot(renderer);
 
+  const diagnostics: string[] = [];
   let exitCode: number | null = null;
   let engine: BenchmarkEngine | null = null;
   let control: EngineObserver | null = null;
@@ -278,6 +279,7 @@ async function runCommandTui(
       renderer.destroy();
     }
     if (state.runId !== null) stdout(`mmstar: run ${state.runId} ${stateLabel(state)}`);
+    for (const diagnostic of diagnostics) process.stderr.write(diagnostic);
     process.exit(code);
   };
   const requestQuit = (): void => {
@@ -323,7 +325,12 @@ async function runCommandTui(
     const context: RunContext = {
       ...buildRunContext({
         emit: (payload) => store.applyLifecycleEvent(payload),
-        stderr: { write: (text) => store.addNotice(text) },
+        stderr: {
+          write: (text) => {
+            diagnostics.push(text);
+            store.addNotice(text);
+          },
+        },
         engineEvents: (event) => store.applyEngineEvent(event),
       }),
       ...overrides,
@@ -341,7 +348,9 @@ async function runCommandTui(
     const result = await execute(request, context);
     exitCode = result.exitCode;
   } catch (error) {
-    store.addNotice(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    diagnostics.push(`mmstar: ${message}\n`);
+    store.addNotice(message);
     exitCode = 1;
   } finally {
     stopMetrics();
@@ -367,7 +376,9 @@ async function runCommandTui(
     // immediately.
     disposeSignals();
   }
-  return restore(renderer, root, store, exitCode ?? 0);
+  const code = restore(renderer, root, store, exitCode ?? 0);
+  for (const diagnostic of diagnostics) process.stderr.write(diagnostic);
+  return code;
 }
 
 async function runDemoTui(options: TuiOptions): Promise<number> {

@@ -108,6 +108,19 @@ function tempDir(prefix: string): string {
 }
 
 describe("runner entry point under a PTY", () => {
+  test("config validation errors survive terminal restoration", async () => {
+    const dir = tempDir("mmstar-invalid-config-");
+    const config = join(dir, "invalid.json");
+    writeFileSync(config, JSON.stringify({ version: 999, models: {}, sets: {} }));
+    const session = startRunner(["benchmark", "--set", "testing", "--config", config]);
+    expect(await session.exited).toBe(2);
+    const output = session.output();
+    expect(output).toContain(RESTORE_ALT_SCREEN);
+    const restored = output.slice(output.lastIndexOf(RESTORE_ALT_SCREEN));
+    expect(restored).toContain(config);
+    expect(restored).toContain("unsupported configuration version");
+  }, 30_000);
+
   test("a settled run exits on its own and restores the terminal", async () => {
     const session = startRunner(["--demo", "--smoke"]);
     const code = await session.exited;
