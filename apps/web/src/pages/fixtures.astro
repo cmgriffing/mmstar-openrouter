@@ -2,18 +2,13 @@
 import type { FixturePage, OutcomeKind, OutcomeState } from "@mmstar/results";
 import FixtureExplorer from "../components/FixtureExplorer";
 import Base from "../layouts/Base.astro";
-import { formatCount, formatDateTime, shortHash } from "../lib/format";
+import { formatCount, formatDateTime } from "../lib/format";
 import { FIXTURE_PAGE_SIZE, evaluationLabel, readFixtureFilters } from "../lib/view";
-import {
-  getPublicationRepository,
-  PublicationUnavailableError,
-  resolveRootRunId,
-} from "../server/publication";
+import { getPublicationRepository, PublicationUnavailableError } from "../server/publication";
 
 export const prerender = false;
 
 interface ExplorerModel {
-  rootRunId: string;
   exports: string | null;
   page: FixturePage;
   initialFilters: {
@@ -33,23 +28,19 @@ let loadError: string | null = null;
 
 try {
   const repository = await getPublicationRepository({ request: Astro.request });
-  const requested = Astro.url.searchParams.get("rootRunId") ?? undefined;
-  const rootRunId = resolveRootRunId(repository, requested);
-  const comparisons = repository.listComparisons(rootRunId);
-  const categories = [
-    ...new Set(repository.listCategories({ rootRunId }).map((row) => row.category)),
-  ].sort((a, b) => a.localeCompare(b));
+  const comparisons = repository.listComparisons();
+  const categories = [...new Set(repository.listCategories().map((row) => row.category))].sort(
+    (a, b) => a.localeCompare(b),
+  );
   const { values, invalid } = readFixtureFilters(Astro.url.searchParams, {
     evaluationIds: new Set(comparisons.map((row) => row.evaluationId)),
     categories: new Set(categories),
   });
   const page = repository.listFixtures({
-    rootRunId,
     ...values,
     limit: FIXTURE_PAGE_SIZE,
   });
   model = {
-    rootRunId,
     exports: formatDateTime(repository.meta().createdAt),
     page,
     initialFilters: {
@@ -79,8 +70,7 @@ try {
 
 <Base
   title="Fixtures · MMStar · OpenRouter"
-  rootRunId={model?.rootRunId}
-  headerMeta={model === null ? undefined : `root run ${shortHash(model.rootRunId)} · exported ${model.exports}`}
+  headerMeta={model === null ? undefined : `publication-wide · exported ${model.exports}`}
 >
   {
     model === null ? (
@@ -100,9 +90,9 @@ try {
             Every fixture, <em>accounted for</em>.
           </h1>
           <p class="hero-sub">
-            Effective outcomes across the run family — one row per evaluation and fixture, even when
-            a recovery run supplied the final answer. Filters re-query the bounded read API; nothing
-            is written back.
+            Effective outcomes across the whole publication — one row per winning family and
+            fixture, even when a recovery run supplied the final answer. Filters re-query the
+            bounded read API; nothing is written back.
           </p>
         </section>
 
@@ -126,7 +116,6 @@ try {
           </div>
           <FixtureExplorer
             client:load
-            rootRunId={model.rootRunId}
             pageSize={FIXTURE_PAGE_SIZE}
             initialPage={model.page}
             initialFilters={model.initialFilters}

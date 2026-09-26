@@ -16,8 +16,8 @@ persisted or wire-facing structure carries an explicit version constant.
 | `MODEL_RECORD_VERSION` | 1 | Per-model JSON records | `packages/results` |
 | `CAPABILITY_SNAPSHOT_VERSION` | 1 | Frozen provider capability snapshot | `packages/results` |
 | `ENGINE_EVENT_VERSION` | 1 | Typed engine events | `packages/benchmark` |
-| `PUBLICATION_SCHEMA_VERSION` | 1 | SQLite publication tables/views | `packages/results` |
-| `EXPORTER_VERSION` | 1 | Publication projection/validation behavior | `packages/results` |
+| `PUBLICATION_SCHEMA_VERSION` | 2 | SQLite publication tables/views | `packages/results` |
+| `EXPORTER_VERSION` | 2 | Publication projection/validation behavior | `packages/results` |
 | `PUBLICATION_MANIFEST_VERSION` | 1 | Publication `manifest.json` | `packages/results` |
 
 Package dependency direction is linear and enforced by imports: `@mmstar/config` →
@@ -220,7 +220,10 @@ artifact described in `docs/publication.md`. Key contracts:
   family's first run, `v_effective_outcomes` picks the newest scored outcome (or the
   newest terminal outcome) per `(family, evaluation, fixture)`, and
   `v_attempt_totals` keeps original+recovery attempt costs without double-counting
-  effective outcomes.
+  effective outcomes. `v_evaluation_family_ranking` and the `v_global_*` views add
+  the publication-wide winner: per evaluation, the newest family root with at least
+  one terminal outcome supplies every row wholesale; a bare `export` publishes every
+  run in the results root.
 - `images.ts` re-validates base64, magic-number/media-type agreement, and the 8 MB
   bound, then writes one file per SHA-256 under `benchmark-images/<hash>.<ext>`.
 - `publish.ts` builds in a temp directory and only swaps it into place after

@@ -543,7 +543,11 @@ async function main(): Promise<void> {
 
   // ----------------------------------------------------------------- export
   const exportFrom = events.length;
-  const exportResult = await executeExport(context, { latest: true, outDir: "publication" });
+  const exportResult = await executeExport(context, {
+    latest: true,
+    all: false,
+    outDir: "publication",
+  });
   assert(exportResult.exitCode === 0, `export exited ${exportResult.exitCode}`);
   const exportOk = eventsByName("export.ok", exportFrom)[0];
   assert(exportOk !== undefined, "export.ok event missing");
@@ -567,13 +571,80 @@ async function main(): Promise<void> {
     "export",
     `ok — 4 runs, ${counts.outcomes} outcomes, ${counts.attempts} attempts, ${verified.manifest.images.fileCount} images`,
   );
+  const familyCalls = stats.calls;
+
+  // ------------------------------------- duplicate primary (second family)
+  const phase5Provider = scriptedProvider({
+    stats,
+    resolve: ({ fixtureId }) => ({ kind: "answer", text: answerOf(fixtureId) }),
+  });
+  const duplicateFrom = events.length;
+  const duplicateResult = await execute(
+    { mode: "run", set: "e2e" },
+    { ...context, provider: phase5Provider },
+  );
+  assert(duplicateResult.exitCode === 0, `duplicate primary exited ${duplicateResult.exitCode}`);
+  const duplicateId = lastRunId();
+  assert(duplicateId !== restartId, "duplicate primary reused the restart run");
+  assert(
+    store.readManifest(duplicateId).lineage.kind === "primary",
+    "duplicate run is not a primary family root",
+  );
+  const duplicateStates = statesOf(duplicateId);
+  assert(duplicateStates.get("settled") === 18, "duplicate primary did not settle every outcome");
+  assert(runIds().length === 5, `expected five runs, saw ${runIds().length}`);
+  assert(
+    events.slice(duplicateFrom).some((event) => event.event === "run.finished"),
+    "duplicate primary did not finish",
+  );
+  log("duplicate", "ok — second primary family settled all 18 outcomes");
+
+  // ------------------------------------------- selector-free export (all runs)
+  const allExportFrom = events.length;
+  const allExportDir = join(workDir, "publication-all");
+  const allExportResult = await executeExport(context, {
+    latest: false,
+    all: true,
+    outDir: "publication-all",
+  });
+  assert(allExportResult.exitCode === 0, `all-runs export exited ${allExportResult.exitCode}`);
+  const allExportOk = eventsByName("export.ok", allExportFrom)[0];
+  assert(allExportOk !== undefined, "all-runs export.ok event missing");
+  assert(allExportOk.mode === "all", `all-runs export reported mode ${String(allExportOk.mode)}`);
+  const allCounts = allExportOk.counts as { runs: number; outcomes: number; attempts: number };
+  assert(allCounts.runs === 5, `all-runs publication has ${allCounts.runs} runs, want 5`);
+  assert(
+    (allExportOk.runIds as string[]).length === runIds().length,
+    "all-runs event does not list every run",
+  );
+  assert(
+    (allExportOk.runIds as string[]).sort().join(",") === runIds().sort().join(","),
+    "all-runs event run IDs do not match the results root",
+  );
+  assert(
+    (allExportOk.rootRunIds as string[]).length === 2,
+    "all-runs publication must resolve both family roots",
+  );
+  assert(allCounts.outcomes === 90, `all-runs publication has ${allCounts.outcomes} outcomes`);
+  assert(
+    allCounts.attempts === stats.calls,
+    `all-runs attempt ledger has ${allCounts.attempts} rows for ${stats.calls} physical provider calls`,
+  );
+  const allVerified = verifyPublication(allExportDir);
+  assert(allVerified.manifest.runs.runIds.length === 5, "all-runs manifest is missing runs");
+  assert(allVerified.manifest.schemaVersion === 2, "all-runs manifest is not schema v2");
+  assert(allVerified.manifest.exporterVersion === 2, "all-runs manifest is not exporter v2");
+  log(
+    "export-all",
+    `ok — ${allCounts.runs} runs, ${allCounts.outcomes} outcomes, ${allCounts.attempts} attempts`,
+  );
 
   // -------------------------------------------------- repository queries
   const db = openSqliteDatabase(join(publicationDir, "benchmark.sqlite"), { readOnly: true });
   try {
     const repository = createPublicationRepository(db);
     const meta = repository.meta();
-    assert(meta.schemaVersion === 1 && meta.exporterVersion === 1, "publication meta is wrong");
+    assert(meta.schemaVersion === 2 && meta.exporterVersion === 2, "publication meta is wrong");
     const rootId = (exportOk.rootRunIds as string[])[0];
     assert(rootId !== undefined, "publication has no root run");
     const runs = repository.listRuns(rootId);
@@ -583,9 +654,13 @@ async function main(): Promise<void> {
         runs.some((run) => run.runKind === "restart"),
       "repository run kinds are incomplete",
     );
-    const comparisons = repository.listComparisons(rootId);
+    const comparisons = repository.listComparisons();
     assert(comparisons.length === 3, `expected three evaluations, saw ${comparisons.length}`);
     for (const comparison of comparisons) {
+      assert(
+        comparison.rootRunId === rootId,
+        `${comparison.evaluationId} provenance is ${comparison.rootRunId}, want ${rootId}`,
+      );
       assert(
         comparison.selected === 6,
         `${comparison.evaluationId} selected ${comparison.selected}`,
@@ -597,12 +672,12 @@ async function main(): Promise<void> {
     const ledgerRow = db.prepare("SELECT COUNT(*) AS attempts FROM attempts").get();
     const ledgerCount = Number(ledgerRow?.attempts ?? -1);
     assert(
-      ledgerCount === stats.calls,
-      `billing ledger has ${ledgerCount} rows for ${stats.calls} physical provider calls`,
+      ledgerCount === familyCalls,
+      `billing ledger has ${ledgerCount} rows for ${familyCalls} physical provider calls`,
     );
-    const categories = repository.listCategories({ rootRunId: rootId });
+    const categories = repository.listCategories();
     assert(categories.length === 18, `expected 18 category rows, saw ${categories.length}`);
-    const page = repository.listFixtures({ rootRunId: rootId, limit: 200 });
+    const page = repository.listFixtures({ limit: 200 });
     assert(page.total === 18, `fixture page totals ${page.total}, want 18`);
     assert(
       page.rows.every((row) => row.imagePath.startsWith("benchmark-images/")),
@@ -612,7 +687,6 @@ async function main(): Promise<void> {
     const timeoutFixture = fixtures[2];
     assert(timeoutFixture !== undefined, "fixture 2 missing");
     const detail = repository.getFixtureDetail({
-      rootRunId: rootId,
       evaluationId: "alpha::default",
       fixtureId: timeoutFixture.fixtureId,
     });
@@ -628,7 +702,7 @@ async function main(): Promise<void> {
     assert(detail.attempts.length === 4, `detail has ${detail.attempts.length} attempts, want 4`);
     log(
       "repository",
-      `ok — 3 evaluations x 6 fixtures, ${ledgerCount} ledger attempts for ${stats.calls} calls, lineage intact`,
+      `ok — 3 evaluations x 6 fixtures, ${ledgerCount} ledger attempts for ${familyCalls} family calls, lineage intact`,
     );
     summary.repository = {
       runs: runs.length,
@@ -642,10 +716,66 @@ async function main(): Promise<void> {
     db.close();
   }
 
-  summary.runs = { primaryId, resumeId, recoveryId, restartId };
+  // ---------------------------------------- global winner over every family
+  const globalDb = openSqliteDatabase(join(allExportDir, "benchmark.sqlite"), { readOnly: true });
+  try {
+    const globalRepository = createPublicationRepository(globalDb);
+    const globalComparisons = globalRepository.listComparisons();
+    assert(globalComparisons.length === 3, `global summary has ${globalComparisons.length} rows`);
+    for (const comparison of globalComparisons) {
+      assert(
+        comparison.rootRunId === duplicateId,
+        `${comparison.evaluationId} global winner is ${comparison.rootRunId}, want ${duplicateId}`,
+      );
+      assert(
+        comparison.selected === 6 && comparison.settled === 6 && comparison.correct === 6,
+        `${comparison.evaluationId} global counts are wrong`,
+      );
+    }
+    const globalPage = globalRepository.listFixtures({ limit: 200 });
+    assert(globalPage.total === 18, `global fixture page totals ${globalPage.total}, want 18`);
+    assert(
+      globalPage.rows.every(
+        (row) => row.rootRunId === duplicateId && row.effectiveRunId === duplicateId,
+      ),
+      "global fixture rows must come from the newest family",
+    );
+    const globalCategories = globalRepository.listCategories();
+    assert(
+      globalCategories.length === 18,
+      `global category rows are ${globalCategories.length}, want 18`,
+    );
+    const globalLedger = globalDb.prepare("SELECT COUNT(*) AS attempts FROM attempts").get();
+    const globalLedgerCount = Number(globalLedger?.attempts ?? -1);
+    assert(
+      globalLedgerCount === stats.calls,
+      `all-runs ledger has ${globalLedgerCount} rows for ${stats.calls} physical provider calls`,
+    );
+    log(
+      "global-winner",
+      `ok — newest family (${duplicateId}) supplies all 3 evaluations and 18 fixtures`,
+    );
+    summary.globalRepository = {
+      evaluations: globalComparisons.length,
+      categories: globalCategories.length,
+      fixtures: globalPage.total,
+      winner: duplicateId,
+      ledgerAttempts: globalLedgerCount,
+    };
+  } finally {
+    globalDb.close();
+  }
+
+  summary.runs = { primaryId, resumeId, recoveryId, restartId, duplicateId };
   summary.physicalCalls = stats.calls;
   summary.exportedAttempts = counts.attempts;
   summary.exportedOutcomes = counts.outcomes;
+  summary.allRunsExport = {
+    directory: allExportDir,
+    runs: allCounts.runs,
+    outcomes: allCounts.outcomes,
+    attempts: allCounts.attempts,
+  };
   summary.imageFiles = verified.manifest.images.fileCount;
   writeFileSync(join(workDir, "e2e-summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
   log("done", `all phases passed; summary written to ${join(workDir, "e2e-summary.json")}`);

@@ -121,17 +121,17 @@ export function parsePublicationManifest(text: string, path: string): Publicatio
   const manifest = parsed as Partial<PublicationManifest>;
   if (manifest.manifestVersion !== PUBLICATION_MANIFEST_VERSION) {
     throw new PublicationValidationError(
-      `publication manifest ${path} declares version ${JSON.stringify(manifest.manifestVersion)}; this build reads ${PUBLICATION_MANIFEST_VERSION}`,
+      `publication manifest ${path} declares version ${JSON.stringify(manifest.manifestVersion)}; this build reads ${PUBLICATION_MANIFEST_VERSION}; re-export the runs with this build`,
     );
   }
   if (manifest.schemaVersion !== PUBLICATION_SCHEMA_VERSION) {
     throw new PublicationValidationError(
-      `publication schema version ${JSON.stringify(manifest.schemaVersion)} is not supported (expected ${PUBLICATION_SCHEMA_VERSION})`,
+      `publication schema version ${JSON.stringify(manifest.schemaVersion)} is not supported (expected ${PUBLICATION_SCHEMA_VERSION}); re-export the runs with this build`,
     );
   }
   if (manifest.exporterVersion !== EXPORTER_VERSION) {
     throw new PublicationValidationError(
-      `publication exporter version ${JSON.stringify(manifest.exporterVersion)} is not supported (expected ${EXPORTER_VERSION})`,
+      `publication exporter version ${JSON.stringify(manifest.exporterVersion)} is not supported (expected ${EXPORTER_VERSION}); re-export the runs with this build`,
     );
   }
   if (manifest.database === undefined || typeof manifest.database.file !== "string") {

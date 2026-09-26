@@ -7,7 +7,7 @@
 
 ## Context
 
-The website queries one immutable `publication/benchmark.sqlite` (schema version 1)
+The website queries one immutable `publication/benchmark.sqlite` (schema version 2)
 plus content-addressed image assets. The schema depends on window functions
 (`ROW_NUMBER() OVER (...)`) and a recursive CTE (`v_runs_with_root`), so the reader
 must bundle a modern SQLite. Serverless/edge targets cannot assume a native SQLite

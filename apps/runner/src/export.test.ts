@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompletionProvider, NormalizedCompletion, ProviderResult } from "@mmstar/benchmark";
-import { RunStore, verifyPublication } from "@mmstar/results/node";
+import { openSqliteDatabase, RunStore, verifyPublication } from "@mmstar/results/node";
 import { describe, expect, it } from "vitest";
 import { execute, type RunContext } from "./execute";
 import { executeExport, exportOptionsFromArgs } from "./export";
@@ -124,10 +124,10 @@ function harness(): Harness {
 }
 
 describe("exportOptionsFromArgs", () => {
-  it("requires exactly one selector and defaults the output directory", () => {
+  it("defaults to an all-runs export and keeps selectors targeted", () => {
     expect(exportOptionsFromArgs([])).toEqual({
-      ok: false,
-      message: "provide --run <id> or --latest",
+      ok: true,
+      options: { runId: undefined, latest: false, all: true, outDir: "publication" },
     });
     expect(exportOptionsFromArgs(["--latest", "--run", "x"])).toEqual({
       ok: false,
@@ -135,11 +135,16 @@ describe("exportOptionsFromArgs", () => {
     });
     expect(exportOptionsFromArgs(["--latest", "--out", "site"])).toEqual({
       ok: true,
-      options: { runId: undefined, latest: true, outDir: "site" },
+      options: { runId: undefined, latest: true, all: false, outDir: "site" },
     });
     expect(exportOptionsFromArgs(["20260101T000000_aaaaaaaa"])).toEqual({
       ok: true,
-      options: { runId: "20260101T000000_aaaaaaaa", latest: false, outDir: "publication" },
+      options: {
+        runId: "20260101T000000_aaaaaaaa",
+        latest: false,
+        all: false,
+        outDir: "publication",
+      },
     });
   });
 });
@@ -156,6 +161,7 @@ describe("executeExport", () => {
       const result = await executeExport(h.context, {
         runId,
         latest: false,
+        all: false,
         outDir: "publication",
       });
       expect(result.exitCode).toBe(0);
@@ -180,6 +186,120 @@ describe("executeExport", () => {
       const okEvent = h.events.find((event) => event.event === "export.ok");
       expect(okEvent).toBeDefined();
       expect(okEvent?.output).toBe(join(h.dir, "publication"));
+      expect(okEvent?.mode).toBe("run");
+      expect(okEvent?.runIds).toEqual([runId]);
+      expect(okEvent?.rootRunIds).toEqual([runId]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("exports every run with a duplicate evaluation, then aborts by name on a corrupt run", async () => {
+    const h = harness();
+    try {
+      expect((await execute({ mode: "run", set: "demo" }, h.context)).exitCode).toBe(0);
+      expect((await execute({ mode: "run", set: "demo" }, h.context)).exitCode).toBe(0);
+      const runIds = h.store.listRunIds();
+      expect(runIds).toHaveLength(2);
+
+      const exportFrom = h.events.length;
+      const result = await executeExport(h.context, {
+        latest: false,
+        all: true,
+        outDir: "publication",
+      });
+      expect(result.exitCode).toBe(0);
+
+      const published = verifyPublication(join(h.dir, "publication"));
+      expect(published.manifest.runs.runIds).toEqual([...runIds].sort());
+      expect(published.manifest.runs.rootRunIds).toEqual([...runIds].sort());
+      expect(published.manifest.database.counts).toEqual({
+        runs: 2,
+        evaluations: 2,
+        fixtures: 2,
+        outcomes: 8,
+        attempts: 8,
+      });
+
+      // Both duplicate families survive in the family-effective view: neither is
+      // dropped at export time; the publication-wide views resolve the winner at
+      // query time.
+      const database = openSqliteDatabase(join(h.dir, "publication", "benchmark.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const families = database
+          .prepare("SELECT COUNT(DISTINCT root_run_id) AS n FROM v_evaluation_summary")
+          .get();
+        expect(Number(families?.n)).toBe(2);
+      } finally {
+        database.close();
+      }
+
+      const okEvent = h.events.slice(exportFrom).find((event) => event.event === "export.ok");
+      expect(okEvent?.mode).toBe("all");
+      expect(okEvent?.runIds).toEqual([...runIds].sort());
+      expect(okEvent?.rootRunIds).toEqual([...runIds].sort());
+
+      // A bare export aborts on the first corrupt run and names it.
+      const corruptRunId = runIds[0] ?? "";
+      writeFileSync(
+        join(h.context.resultsRoot, corruptRunId, "models", "alpha.json"),
+        "{ not json",
+      );
+      const failed = await executeExport(h.context, {
+        latest: false,
+        all: true,
+        outDir: "publication",
+      });
+      expect(failed.exitCode).toBe(1);
+      expect(h.stderr.join("")).toContain(corruptRunId);
+      expect(verifyPublication(join(h.dir, "publication")).manifest.createdAt).toBe(
+        published.manifest.createdAt,
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("aborts an all-runs export when duplicate evaluation identities disagree", async () => {
+    const h = harness();
+    try {
+      expect((await execute({ mode: "run", set: "demo" }, h.context)).exitCode).toBe(0);
+      const firstRunId = h.store.listRunIds()[0] ?? "";
+      expect(
+        (
+          await executeExport(h.context, {
+            runId: firstRunId,
+            latest: false,
+            all: false,
+            outDir: "publication",
+          })
+        ).exitCode,
+      ).toBe(0);
+      const published = verifyPublication(join(h.dir, "publication"));
+
+      // The second primary freezes a different OpenRouter model ID under the
+      // same evaluation ID; the exporter cannot publish both identity claims.
+      writeFileSync(
+        join(h.dir, "mmstar.config.json"),
+        buildConfig().replace('"vendor/alpha"', '"vendor/alpha-v2"'),
+      );
+      expect((await execute({ mode: "run", set: "demo" }, h.context)).exitCode).toBe(0);
+
+      const conflictFrom = h.events.length;
+      const failed = await executeExport(h.context, {
+        latest: false,
+        all: true,
+        outDir: "publication",
+      });
+      expect(failed.exitCode).toBe(1);
+      const error = h.events.slice(conflictFrom).find((event) => event.event === "error");
+      expect(error?.kind).toBe("PublicationConflictError");
+      expect(h.stderr.join("")).toContain("disagrees with run");
+      expect(verifyPublication(join(h.dir, "publication")).manifest.createdAt).toBe(
+        published.manifest.createdAt,
+      );
     } finally {
       h.cleanup();
     }
@@ -191,7 +311,14 @@ describe("executeExport", () => {
       expect((await execute({ mode: "run", set: "demo" }, h.context)).exitCode).toBe(0);
       const runId = h.store.listRunIds()[0] ?? "";
       expect(
-        (await executeExport(h.context, { runId, latest: false, outDir: "publication" })).exitCode,
+        (
+          await executeExport(h.context, {
+            runId,
+            latest: false,
+            all: false,
+            outDir: "publication",
+          })
+        ).exitCode,
       ).toBe(0);
       const firstCreatedAt = verifyPublication(join(h.dir, "publication")).manifest.createdAt;
 
@@ -200,6 +327,7 @@ describe("executeExport", () => {
       const failed = await executeExport(h.context, {
         runId,
         latest: false,
+        all: false,
         outDir: "publication",
       });
       expect(failed.exitCode).toBe(1);
@@ -218,6 +346,7 @@ describe("executeExport", () => {
       const result = await executeExport(h.context, {
         runId: h.store.listRunIds()[0] ?? "",
         latest: false,
+        all: false,
         outDir: "publication",
       });
       expect(result.exitCode).toBe(2);
@@ -239,6 +368,7 @@ describe("executeExport", () => {
           await executeExport(h.context, {
             runId: h.store.listRunIds()[0] ?? "",
             latest: false,
+            all: false,
             outDir: "publication",
           })
         ).exitCode,

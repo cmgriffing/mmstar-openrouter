@@ -18,6 +18,7 @@ import {
   PUBLICATION_MANIFEST_FILE,
   PUBLICATION_META_SCHEMA_VERSION,
   PUBLICATION_SCHEMA_VERSION,
+  PUBLICATION_VIEWS,
 } from "./schema";
 import { openSqliteDatabase } from "./sqlite-node";
 
@@ -62,6 +63,19 @@ export function verifyPublication(outputDir: string): VerifiedPublication {
       .get(PUBLICATION_META_SCHEMA_VERSION);
     if (meta === undefined || Number(readValue(meta, "value")) !== PUBLICATION_SCHEMA_VERSION) {
       throw new PublicationValidationError("database schema version does not match this build");
+    }
+    const views = new Set(
+      database
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'view'")
+        .all()
+        .map((row) => readValue(row, "name")),
+    );
+    for (const view of PUBLICATION_VIEWS) {
+      if (!views.has(view)) {
+        throw new PublicationValidationError(
+          `database is missing the ${view} view; re-export with this exporter version`,
+        );
+      }
     }
     const counts = {
       runs: countRows(database, "runs"),

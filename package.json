@@ -21,7 +21,7 @@
     "resume": "pnpm --filter @mmstar/runner resume",
     "retry-failed": "pnpm --filter @mmstar/runner retry-failed",
     "restart": "pnpm --filter @mmstar/runner restart",
-    "export": "turbo run export"
+    "export": "cd apps/runner && bun run src/cli.ts export --out ../../publication"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",

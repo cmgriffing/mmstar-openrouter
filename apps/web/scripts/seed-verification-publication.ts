@@ -10,8 +10,12 @@
  * - root family with correct/incorrect/ambiguous/truncated outcomes, a timeout
  *   failure recovered by a linked recovery run, indeterminate submissions, and
  *   unknown/estimated/reported costs;
- * - a restart family that is still running, with pending work and a recovery
- *   child whose frozen settings differ (the "mixed settings" warning);
+ * - a restart family that is still running, with pending work for every
+ *   evaluation and a recovery child whose frozen settings differ (the "mixed
+ *   settings" warning) and which has settled only `demo::low`, so the newer
+ *   family shadows the older family's complete `demo::low` results with 3/30
+ *   coverage while `demo::high` and `demo::none` stay on the older family — the
+ *   global winner rule and its reduced coverage in one publication;
  * - two deduplicated content-addressed images shared across fixtures.
  *
  * It writes only the files the website needs (`benchmark.sqlite` and
@@ -53,6 +57,13 @@ const EVALUATIONS = [
     modelAlias: "demo",
     openRouterId: "demo/vision-model",
     reasoningMode: "none",
+    rateLimitGroup: "g-demo",
+  },
+  {
+    evaluationId: "demo::low",
+    modelAlias: "demo",
+    openRouterId: "demo/vision-model",
+    reasoningMode: "low",
     rateLimitGroup: "g-demo",
   },
 ] as const;
@@ -698,6 +709,37 @@ for (let index = 0; index < FIXTURE_COUNT; index += 1) {
     });
   }
 
+  // demo::low on the original run: a complete older result set the restart
+  // family shadows (its recovery child settles the same evaluation).
+  insertOutcome({
+    runId: ROOT_RUN,
+    evaluationId: "demo::low",
+    fixtureId,
+    state: "settled",
+    kind: "correct",
+    parsedAnswer: optionAnswer(index),
+    responseText: `Answer: ${optionAnswer(index)}`,
+    usageKnown: true,
+    costKind: "reported",
+    costUsd: 0.0011,
+    requestLatencyMs: 720,
+    totalFixtureTimeMs: 760,
+    attemptCount: 1,
+    updatedAt,
+  });
+  insertAttempt({
+    runId: ROOT_RUN,
+    evaluationId: "demo::low",
+    fixtureId,
+    attemptNumber: 1,
+    state: "completed",
+    submitted: true,
+    finished: true,
+    usageKnown: true,
+    costKind: "reported",
+    costUsd: 0.0011,
+  });
+
   // Recovery run: every timeout failure from demo::high gets a linked outcome.
   if (pattern === 3) {
     const recoveredCorrect = index % 2 === 0;
@@ -732,7 +774,10 @@ for (let index = 0; index < FIXTURE_COUNT; index += 1) {
     });
   }
 
-  // Restart family: pending work on every fixture plus a few recovered rows.
+  // Restart family: pending work on every fixture and every evaluation. The
+  // recovery child settles only demo::low, so that evaluation resolves to this
+  // newer family wholesale — shadowing the older family's complete demo::low
+  // results — while the older family supplies the other two.
   for (const evaluation of EVALUATIONS) {
     insertOutcome({
       runId: RESTART_RUN,
@@ -754,7 +799,7 @@ for (let index = 0; index < FIXTURE_COUNT; index += 1) {
   if (index < 3) {
     insertOutcome({
       runId: RESTART_RECOVERY_RUN,
-      evaluationId: "demo::high",
+      evaluationId: "demo::low",
       fixtureId,
       state: "settled",
       kind: "correct",
@@ -771,7 +816,7 @@ for (let index = 0; index < FIXTURE_COUNT; index += 1) {
     });
     insertAttempt({
       runId: RESTART_RECOVERY_RUN,
-      evaluationId: "demo::high",
+      evaluationId: "demo::low",
       fixtureId,
       attemptNumber: 1,
       state: "completed",

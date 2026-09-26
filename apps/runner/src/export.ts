@@ -1,20 +1,28 @@
 /**
- * `mmstar export`: turn a run family's durable JSON into a validated,
- * immutable publication directory.
+ * `mmstar export`: turn durable run JSON into a validated, immutable
+ * publication directory.
  *
- * The command selects one run (`--run <id>` or `--latest`), resolves the whole
+ * With no selector the command exports every run in the results root; `--run
+ * <id>` (or a positional ID) and `--latest` stay targeted and resolve the whole
  * family (ancestors plus descendants, so restarts and recoveries travel with the
- * experiment), reloads the committed dataset to verify the frozen hash, and
- * hands the projections to `@mmstar/results/node`. The publication itself lives
- * in `packages/results`; this module owns selection, dataset access, and CLI
- * flags.
+ * experiment). Either way it reloads the committed dataset to verify the frozen
+ * hashes, and hands the projections to `@mmstar/results/node`. The publication
+ * itself lives in `packages/results`; this module owns selection, dataset
+ * access, and CLI flags.
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ValidationError } from "@mmstar/config";
 import type { RunManifest } from "@mmstar/results";
-import { publishPublication, RunStore, reconcileRun, resolveLineage } from "@mmstar/results/node";
+import { canonicalJson, PublicationConflictError } from "@mmstar/results";
+import {
+  publishPublication,
+  RunNotFoundError,
+  RunStore,
+  reconcileRun,
+  resolveLineage,
+} from "@mmstar/results/node";
 import {
   type CommandResult,
   loadDataset,
@@ -27,6 +35,12 @@ import { flagsForCommand, parseFlags } from "./flags";
 export interface ExportOptions {
   runId?: string | undefined;
   latest: boolean;
+  /**
+   * Informational: true when no selector was given. Selectors stay
+   * authoritative in `resolveExportSelection`, so a contradictory flag cannot
+   * pick a different run set than the CLI parsed.
+   */
+  all: boolean;
   /** Publication output directory, relative to the working directory. */
   outDir: string;
 }
@@ -43,12 +57,53 @@ export function exportOptionsFromArgs(
   if (runId !== undefined && latest) {
     return { ok: false, message: "provide either --run <id> or --latest, not both" };
   }
-  if (runId === undefined && !latest) {
-    return { ok: false, message: "provide --run <id> or --latest" };
-  }
   return {
     ok: true,
-    options: { runId, latest, outDir: values.get("out") ?? "publication" },
+    options: {
+      runId,
+      latest,
+      all: runId === undefined && !latest,
+      outDir: values.get("out") ?? "publication",
+    },
+  };
+}
+
+interface ExportSelection {
+  mode: "all" | "run" | "latest";
+  /** Runs to project, in projection order. */
+  runs: RunManifest[];
+  /** The run named by a targeted selector; null for an all-runs export. */
+  selectedRunId: string | null;
+  /** Dataset to load; every selected run's frozen hash must match it. */
+  dataset: { path: string; sha256: string };
+}
+
+/**
+ * Resolve what a bare or targeted export publishes. A bare export enumerates
+ * every run in the results root (including every family), while selectors keep
+ * the existing single-family behavior.
+ */
+export function resolveExportSelection(store: RunStore, options: ExportOptions): ExportSelection {
+  const targeted = options.runId !== undefined || options.latest;
+  if (!targeted) {
+    const runIds = store.listRunIds();
+    if (runIds.length === 0) throw new RunNotFoundError("any run", store.root);
+    const runs = runIds.map((runId) => store.readManifest(runId));
+    const first = runs[0];
+    if (first === undefined) throw new RunNotFoundError("any run", store.root);
+    return {
+      mode: "all",
+      runs,
+      selectedRunId: null,
+      dataset: { path: first.plan.dataset.path, sha256: first.plan.dataset.sha256 },
+    };
+  }
+  const selected = store.resolveSelector({ runId: options.runId, latest: options.latest });
+  return {
+    mode: options.latest ? "latest" : "run",
+    runs: collectFamily(store, selected),
+    selectedRunId: selected.runId,
+    dataset: { path: selected.plan.dataset.path, sha256: selected.plan.dataset.sha256 },
   };
 }
 
@@ -59,13 +114,10 @@ export async function executeExport(
   const startedAt = context.now?.() ?? Date.now();
   try {
     const store = new RunStore({ root: resolvePath(context.cwd, context.resultsRoot) });
-    const selected = store.resolveSelector({
-      runId: options.runId,
-      latest: options.latest,
-    });
-    const family = collectFamily(store, selected);
+    const selection = resolveExportSelection(store, options);
+    const family = selection.runs;
 
-    const dataset = await loadDataset(resolvePath(context.cwd, selected.plan.dataset.path));
+    const dataset = await loadDataset(resolvePath(context.cwd, selection.dataset.path));
     for (const run of family) {
       if (run.plan.dataset.sha256 !== dataset.sha256) {
         throw new ValidationError("publication", [
@@ -79,20 +131,24 @@ export async function executeExport(
     }
 
     const fixtureIds: string[] = [];
+    const fixtureOwner = new Map<string, string>();
     for (const run of family) {
       for (const fixtureId of run.plan.dataset.fixtureIds) {
-        if (!fixtureIds.includes(fixtureId)) fixtureIds.push(fixtureId);
+        if (fixtureOwner.has(fixtureId)) continue;
+        fixtureOwner.set(fixtureId, run.runId);
+        fixtureIds.push(fixtureId);
       }
     }
     const recordsById = new Map(dataset.records.map((record) => [record.fixtureId, record]));
     const fixtures = fixtureIds.map((fixtureId) => {
       const record = recordsById.get(fixtureId);
       if (record === undefined) {
-        throw new ValidationError(`dataset ${selected.plan.dataset.path}`, [
+        const owner = fixtureOwner.get(fixtureId) ?? "unknown";
+        throw new ValidationError(`dataset ${selection.dataset.path}`, [
           {
-            path: `fixture ${fixtureId}`,
+            path: `runs.${owner}.plan.dataset.fixtureIds`,
             code: "missing_fixture",
-            message: "a selected fixture is not present in the current dataset",
+            message: `run ${owner} plans fixture ${fixtureId}, which is not present in the current dataset`,
           },
         ]);
       }
@@ -107,6 +163,7 @@ export async function executeExport(
       };
     });
 
+    assertConsistentEvaluationIdentities(family);
     const runs = family.map((run) => ({
       manifest: run,
       evaluations: reconcileRun(store, run.runId).evaluations,
@@ -118,8 +175,8 @@ export async function executeExport(
       outputDir,
       resultsRoot: resolvePath(context.cwd, context.resultsRoot),
       dataset: {
-        path: selected.plan.dataset.path,
-        sha256: selected.plan.dataset.sha256,
+        path: selection.dataset.path,
+        sha256: selection.dataset.sha256,
       },
       runs,
       fixtures,
@@ -129,7 +186,8 @@ export async function executeExport(
     context.emit({
       event: "export.ok",
       output: outputDir,
-      selectedRun: selected.runId,
+      mode: selection.mode,
+      selectedRun: selection.selectedRunId,
       runIds: result.manifest.runs.runIds,
       rootRunIds: result.manifest.runs.rootRunIds,
       counts: result.manifest.database.counts,
@@ -144,6 +202,39 @@ export async function executeExport(
     return { exitCode: 0 };
   } catch (error) {
     return reportError(error, context);
+  }
+}
+
+/**
+ * Fail before projection when two selected runs share an evaluation ID but
+ * disagree on model identity or routing: the evaluations table has one row per
+ * ID, so publishing both would either overwrite or silently misattribute rows.
+ * The error names the run that introduced the conflict so it can be pruned or
+ * renamed.
+ */
+export function assertConsistentEvaluationIdentities(runs: readonly RunManifest[]): void {
+  const seen = new Map<string, { runId: string; identity: string }>();
+  for (const run of runs) {
+    for (const evaluation of run.plan.evaluations) {
+      const identity = canonicalJson({
+        modelAlias: evaluation.modelAlias,
+        openRouterId: evaluation.openRouterId,
+        reasoningMode: evaluation.reasoningMode,
+        rateLimitGroup: evaluation.rateLimitGroup,
+        provider: evaluation.provider ?? null,
+      });
+      const existing = seen.get(evaluation.evaluationId);
+      if (existing === undefined) {
+        seen.set(evaluation.evaluationId, { runId: run.runId, identity });
+        continue;
+      }
+      if (existing.identity !== identity) {
+        throw new PublicationConflictError(
+          evaluation.evaluationId,
+          `run ${run.runId} disagrees with run ${existing.runId} on this evaluation's model identity or routing; rename the alias when model configuration changes`,
+        );
+      }
+    }
   }
 }
 

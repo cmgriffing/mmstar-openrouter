@@ -174,11 +174,13 @@ export interface SettingIssue {
 }
 
 /**
- * Frozen experiment settings that must match across a run family. Recovery and
- * restart runs are expected to repeat the same prompt/scorer/dataset contract;
- * when they do not, aggregated comparisons are not like-for-like.
+ * Frozen experiment settings that must match across the winning families.
+ * Recovery and restart runs are expected to repeat the same prompt/scorer/dataset
+ * contract; when publication-wide winners do not, aggregated comparisons are not
+ * like-for-like. The caller passes the runs belonging to the winning families
+ * (every run whose root won at least one evaluation).
  */
-export function familySettingIssues(runs: RunSummary[]): SettingIssue[] {
+export function publicationSettingIssues(runs: RunSummary[]): SettingIssue[] {
   const fields: { field: string; read: (run: RunSummary) => string }[] = [
     { field: "set", read: (run) => run.setName },
     { field: "prompt version", read: (run) => `v${run.promptVersion}` },
@@ -255,7 +257,6 @@ export function readFixtureFilters(
 }
 
 export interface FixtureQueryInput {
-  rootRunId: string;
   evaluationId?: string | undefined;
   category?: string | undefined;
   state?: OutcomeState | undefined;
@@ -266,7 +267,7 @@ export interface FixtureQueryInput {
 
 /** Canonical drilldown query string used for links and URL sync. */
 export function fixtureQueryString(input: FixtureQueryInput): string {
-  const params = new URLSearchParams({ rootRunId: input.rootRunId });
+  const params = new URLSearchParams();
   if (input.evaluationId !== undefined) params.set("evaluationId", input.evaluationId);
   if (input.category !== undefined) params.set("category", input.category);
   if (input.state !== undefined) params.set("state", input.state);

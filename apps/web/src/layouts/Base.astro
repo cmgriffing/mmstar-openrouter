@@ -4,7 +4,6 @@ import "../styles/global.css";
 interface Props {
   title?: string;
   description?: string;
-  rootRunId?: string;
   headerMeta?: string;
   footerMeta?: string;
 }
@@ -12,17 +11,15 @@ interface Props {
 const {
   title = "MMStar · OpenRouter",
   description = "Read-only results publication for MMStar image-understanding benchmarks run through OpenRouter.",
-  rootRunId,
   headerMeta,
   footerMeta,
 } = Astro.props;
 
-const suffix = rootRunId === undefined ? "" : `?rootRunId=${encodeURIComponent(rootRunId)}`;
 const current = Astro.url.pathname;
 const links = [
-  { href: `/${suffix}`, label: "Comparisons", active: current === "/" },
+  { href: "/", label: "Comparisons", active: current === "/" },
   {
-    href: `/fixtures${suffix}`,
+    href: "/fixtures",
     label: "Fixtures",
     active: current.startsWith("/fixtures") || current.startsWith("/fixture"),
   },
@@ -47,7 +44,7 @@ const links = [
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="topbar">
       <div class="shell topbar-inner">
-        <a class="brand" href={`/${suffix}`}>MMStar <span>· OpenRouter</span></a>
+        <a class="brand" href="/">MMStar <span>· OpenRouter</span></a>
         <nav class="topnav" aria-label="Sections">
           {
             links.map((link) => (

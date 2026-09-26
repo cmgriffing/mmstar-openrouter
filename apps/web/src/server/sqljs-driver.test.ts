@@ -9,7 +9,12 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPublicationRepository, createPublicationSchema } from "@mmstar/results";
+import {
+  createPublicationRepository,
+  createPublicationSchema,
+  EXPORTER_VERSION,
+  PUBLICATION_SCHEMA_VERSION,
+} from "@mmstar/results";
 import { openSqliteDatabase } from "@mmstar/results/node";
 import { afterAll, describe, expect, it } from "vitest";
 import { loadSqlJs, openSqlJsDatabase } from "./sqljs-driver";
@@ -45,7 +50,10 @@ describe("openSqlJsDatabase", () => {
     const database = openSqlJsDatabase(SQL, seedDatabaseBytes(), { readOnly: true });
     try {
       const repository = createPublicationRepository(database);
-      expect(repository.meta()).toMatchObject({ schemaVersion: 1, exporterVersion: 1 });
+      expect(repository.meta()).toMatchObject({
+        schemaVersion: PUBLICATION_SCHEMA_VERSION,
+        exporterVersion: EXPORTER_VERSION,
+      });
       expect(repository.listRuns()).toEqual([
         expect.objectContaining({ runId: "run-1", isRoot: true, lifecycleState: "completed" }),
       ]);

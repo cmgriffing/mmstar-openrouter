@@ -19,7 +19,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPublicationRepository, type PublicationRepository } from "@mmstar/results";
+import {
+  createPublicationRepository,
+  EXPORTER_VERSION,
+  PUBLICATION_SCHEMA_VERSION,
+  PUBLICATION_VIEWS,
+  type PublicationRepository,
+  type SqliteDatabase,
+} from "@mmstar/results";
 import { loadSqlJs, openSqlJsDatabase } from "./sqljs-driver";
 
 const DATABASE_ASSET = "publication/benchmark.sqlite";
@@ -56,6 +63,50 @@ export class PublicationUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PublicationUnavailableError";
+  }
+}
+
+/**
+ * Refuse to serve a database this build cannot read. The reader checks the
+ * recorded schema/exporter versions and every view the query layer needs, so an
+ * exporter-v1 or partially-built artifact fails with one actionable re-export
+ * message instead of a raw "no such table" SQL error on every request.
+ */
+export function assertPublicationReadable(database: SqliteDatabase): void {
+  let meta: Map<string, string>;
+  try {
+    meta = new Map(
+      database
+        .prepare("SELECT key, value FROM publication_meta")
+        .all()
+        .map((row) => [String(row.key), String(row.value ?? "")]),
+    );
+  } catch {
+    throw new PublicationUnavailableError(
+      "asset is not a publication database (publication_meta is missing); re-export the runs with this build",
+    );
+  }
+  const schemaVersion = meta.get("schema_version") ?? "?";
+  const exporterVersion = meta.get("exporter_version") ?? "?";
+  if (
+    schemaVersion !== String(PUBLICATION_SCHEMA_VERSION) ||
+    exporterVersion !== String(EXPORTER_VERSION)
+  ) {
+    throw new PublicationUnavailableError(
+      `publication declares schema v${schemaVersion} / exporter v${exporterVersion}; this build reads schema v${PUBLICATION_SCHEMA_VERSION} / exporter v${EXPORTER_VERSION}. Re-export the runs with this build`,
+    );
+  }
+  const views = new Set(
+    database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'view'")
+      .all()
+      .map((row) => String(row.name)),
+  );
+  const missing = PUBLICATION_VIEWS.filter((view) => !views.has(view));
+  if (missing.length > 0) {
+    throw new PublicationUnavailableError(
+      `publication is missing required views (${missing.join(", ")}); re-export the runs with this build`,
+    );
   }
 }
 
@@ -210,15 +261,11 @@ async function openRepository(context: PublicationRequestContext): Promise<Publi
       ? await loadSqlJs({ wasmModule: source.wasmModule })
       : await loadSqlJs({ wasmBinary: source.wasmBinary as Uint8Array });
   const database = openSqlJsDatabase(SQL, source.database, { readOnly: true });
-  return createPublicationRepository(database);
-}
-
-/** The newest family root, used when a query omits `rootRunId`. */
-export function resolveRootRunId(repository: PublicationRepository, explicit?: string): string {
-  if (explicit !== undefined && explicit.length > 0) return explicit;
-  const root = repository.listRuns().find((run) => run.isRoot);
-  if (root === undefined) {
-    throw new PublicationUnavailableError("publication contains no runs");
+  try {
+    assertPublicationReadable(database);
+  } catch (error) {
+    database.close();
+    throw error;
   }
-  return root.runId;
+  return createPublicationRepository(database);
 }

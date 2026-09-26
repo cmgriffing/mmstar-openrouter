@@ -19,6 +19,7 @@ const publicDir = join(webDir, "public");
 
 const databaseSource = join(publicationDir, "benchmark.sqlite");
 const imagesSource = join(publicationDir, "benchmark-images");
+const manifestSource = join(publicationDir, "manifest.json");
 const wasmSource = join(webDir, "node_modules", "sql.js", "dist", "sql-wasm.wasm");
 
 if (!existsSync(databaseSource) || !existsSync(imagesSource)) {
@@ -33,6 +34,21 @@ if (!existsSync(databaseSource) || !existsSync(imagesSource)) {
 
 mkdirSync(join(publicDir, "publication"), { recursive: true });
 cpSync(databaseSource, join(publicDir, "publication", "benchmark.sqlite"));
+const manifestTarget = join(publicDir, "publication", "manifest.json");
+if (!existsSync(manifestSource)) {
+  // The repository guard reads the database, so the site still refuses v1
+  // artifacts; the manifest is carried for operators and CI. Seed/UI fixtures
+  // are explicitly not validated exports and stay usable when not required.
+  if (process.env.MMSTAR_REQUIRE_PUBLICATION === "1") {
+    console.error(
+      `[sync-publication] publication at ${publicationDir} has no manifest.json; run \`pnpm export\` first`,
+    );
+    process.exit(1);
+  }
+  rmSync(manifestTarget, { force: true });
+} else {
+  cpSync(manifestSource, manifestTarget);
+}
 rmSync(join(publicDir, "benchmark-images"), { recursive: true, force: true });
 cpSync(imagesSource, join(publicDir, "benchmark-images"), { recursive: true });
 cpSync(wasmSource, join(publicDir, "sql-wasm.wasm"));

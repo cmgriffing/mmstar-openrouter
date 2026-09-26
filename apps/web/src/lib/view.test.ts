@@ -5,13 +5,13 @@ import {
   categoryCell,
   categoryMatrix,
   comparisonCost,
-  familySettingIssues,
   fixtureQueryString,
   isIncomplete,
   OUTCOME_KIND_OPTIONS,
   OUTCOME_STATE_OPTIONS,
   outcomePresentation,
   parseBackTarget,
+  publicationSettingIssues,
   readFixtureFilters,
   sortComparisons,
   unresolvedCount,
@@ -147,9 +147,11 @@ describe("comparison presentation", () => {
     expect(unknown.detail).toContain("3 attempts with unknown cost");
   });
 
-  it("reports mixed frozen settings", () => {
-    expect(familySettingIssues([run(), run({ runId: "child", rootRunId: "root" })])).toEqual([]);
-    const issues = familySettingIssues([run(), run({ runId: "child", promptVersion: 2 })]);
+  it("reports mixed frozen settings across winning families", () => {
+    expect(publicationSettingIssues([run(), run({ runId: "child", rootRunId: "root" })])).toEqual(
+      [],
+    );
+    const issues = publicationSettingIssues([run(), run({ runId: "child", promptVersion: 2 })]);
     expect(issues).toEqual([{ field: "prompt version", values: ["v1", "v2"] }]);
   });
 });
@@ -195,13 +197,11 @@ describe("filter sanitization", () => {
   });
 
   it("builds canonical drilldown query strings with an explicit page size", () => {
-    expect(fixtureQueryString({ rootRunId: "root", evaluationId: "alpha::high", limit: 25 })).toBe(
-      "rootRunId=root&evaluationId=alpha%3A%3Ahigh&limit=25",
+    expect(fixtureQueryString({ evaluationId: "alpha::high", limit: 25 })).toBe(
+      "evaluationId=alpha%3A%3Ahigh&limit=25",
     );
-    expect(fixtureQueryString({ rootRunId: "root", offset: 0 })).toBe("rootRunId=root");
-    expect(fixtureQueryString({ rootRunId: "root", state: "failed", offset: 50 })).toBe(
-      "rootRunId=root&state=failed&offset=50",
-    );
+    expect(fixtureQueryString({ offset: 0 })).toBe("");
+    expect(fixtureQueryString({ state: "failed", offset: 50 })).toBe("state=failed&offset=50");
   });
 });
 
