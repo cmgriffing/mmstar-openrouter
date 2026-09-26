@@ -1,9 +1,11 @@
 # Publication artifacts
 
-A **publication** is the immutable, deployable snapshot of a run family: one SQLite
+A **publication** is the immutable, deployable snapshot of the results root: one SQLite
 database plus a content-addressed image inventory, bound together by a manifest. The
-website queries a publication read-only; publishing new results means running `export`
-and redeploying, never writing to a live database.
+publication holds every exported run's lineage and attempt ledger; comparisons resolve
+each evaluation through the winning-family rule. The website queries a publication
+read-only; publishing new results means running `export` and redeploying, never writing
+to a live database.
 
 Generated artifacts stay Git-ignored (`/publication/`, `benchmark-images/`,
 `apps/web/public/publication/`). `MMStar.tsv` remains the single committed image
@@ -18,16 +20,22 @@ publication/
   benchmark-images/<sha256>.<ext>   original image bytes, deduplicated by content
 ```
 
-`export --run ID|--latest [--out DIR]` builds the whole **family** of the selected run
-(the topmost ancestor plus every descendant), so restarts and recoveries are published
-together. It reloads the dataset named by the frozen plan and fails when the dataset
-hash no longer matches, when a fixture or image is missing, when a run file is corrupt,
-or when two records claim the same identity with different content.
+`export [ID|--latest] [--out DIR]` with no selector exports **every** run in the results
+root. `--run ID` (or a positional ID) and `--latest` stay targeted and build the whole
+**family** of the selected run (the topmost ancestor plus every descendant), so restarts
+and recoveries are published together. Either way export reloads the dataset named by
+the frozen plan and fails when the dataset hash no longer matches, when a fixture or
+image is missing, when a run file is corrupt, or when two records claim the same
+identity with different content. A bare export is all-or-nothing across the whole
+results root: the first bad run fails the command and names the run, and the previous
+publication stays in place.
 
 ## Schema
 
-Schema version 1. Every table and view is created idempotently, and
-`publication_meta` records the schema and exporter versions.
+Schema version 2. Every table and view is created idempotently, and
+`publication_meta` records the schema and exporter versions. Publications built by
+exporter v1 are rejected by this verifier and by the deployed website reader when it
+opens the database; re-export them.
 
 | Table | Key | Contents |
 | --- | --- | --- |
@@ -61,6 +69,22 @@ evaluation/fixture/number), which is why the run is part of the key.
   effective outcome counts.
 - `v_fixture_drilldown` — effective outcome joined to fixture metadata and image path
   for paginated drilldown.
+- `v_evaluation_family_ranking` — every family root with at least one terminal outcome
+  per evaluation, ranked newest-first (root `created_at`, then run ID).
+- `v_global_effective_outcomes` — the winning family's rows wholesale: exactly one row
+  per `(evaluation, fixture)` across the publication, never stitched between families.
+- `v_global_evaluation_summary` / `v_global_category_summary` / `v_global_fixture_drilldown`
+  — the publication-wide summaries and drilldown used by the website, carrying the
+  winning family's `root_run_id` as provenance.
+
+The winning-family rule: for each evaluation, the newest family root with at least one
+terminal outcome owns every row for that evaluation. Terminal includes request failures:
+a newer family that has only failed so far still wins, because the newest run is the
+source of truth. `mmstar retry-failed` is the repair path — it adds a recovery child
+inside the winning family, so a fixed fixture is stitched in without handing the
+evaluation back to a shadowed family. A newer family that has settled only some fixtures
+wins wholesale with reduced coverage; a newer family with only pending outcomes never
+wins; recovery stitching applies inside the winning family unchanged.
 
 ## Public projection rules
 

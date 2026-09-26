@@ -1078,7 +1078,7 @@ describe("hardening boundaries (11.2)", () => {
 
       // The halted family still exports: a partial run is publishable evidence.
       const outDir = join(h.dir, "publication");
-      const exported = await executeExport(h.context, { latest: true, outDir });
+      const exported = await executeExport(h.context, { latest: true, all: false, outDir });
       expect(exported.exitCode).toBe(0);
       verifyPublication(outDir);
       const database = openSqliteDatabase(join(outDir, "benchmark.sqlite"), { readOnly: true });

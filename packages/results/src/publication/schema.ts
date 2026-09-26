@@ -15,6 +15,12 @@
  *   `(family, evaluation, fixture)` — the newest scored outcome, or the newest
  *   terminal outcome when nothing scored — so recovery history never
  *   double-counts a fixture.
+ * - `v_evaluation_family_ranking`: for each evaluation, the family roots with at
+ *   least one terminal outcome, ranked newest-first.
+ * - `v_global_effective_outcomes` and the `v_global_*` summaries/drilldown: one
+ *   row per `(evaluation, fixture)` across the whole publication. The newest
+ *   family with terminal outcomes for an evaluation wins it wholesale; rows are
+ *   never stitched across families.
  *
  * All statements are `IF NOT EXISTS`; `createPublicationSchema` additionally
  * sets `PRAGMA user_version` and the schema-version meta row.
@@ -23,9 +29,9 @@
 import type { SqliteDatabase } from "./driver";
 
 /** Bump when a table, column, index, or view changes shape. */
-export const PUBLICATION_SCHEMA_VERSION = 1;
+export const PUBLICATION_SCHEMA_VERSION = 2;
 /** Bump when the exporter's projection/validation behavior changes. */
-export const EXPORTER_VERSION = 1;
+export const EXPORTER_VERSION = 2;
 /** Bump when the publication manifest shape changes. */
 export const PUBLICATION_MANIFEST_VERSION = 1;
 
@@ -64,6 +70,11 @@ export const PUBLICATION_VIEWS = [
   "v_category_summary",
   "v_attempt_totals",
   "v_fixture_drilldown",
+  "v_evaluation_family_ranking",
+  "v_global_effective_outcomes",
+  "v_global_evaluation_summary",
+  "v_global_category_summary",
+  "v_global_fixture_drilldown",
 ] as const;
 
 const TABLE_STATEMENTS: readonly string[] = [
@@ -324,6 +335,103 @@ const VIEW_STATEMENTS: readonly string[] = [
      fixtures.image_sha256,
      fixtures.image_byte_length
    FROM v_effective_outcomes effective
+   JOIN fixtures ON fixtures.fixture_id = effective.fixture_id`,
+  `CREATE VIEW IF NOT EXISTS v_evaluation_family_ranking AS
+   WITH terminal_families AS (
+     SELECT DISTINCT
+       runs.root_run_id,
+       outcomes.evaluation_id,
+       roots.created_at AS root_created_at
+     FROM outcomes
+     JOIN runs ON runs.run_id = outcomes.run_id
+     JOIN runs roots ON roots.run_id = runs.root_run_id
+     WHERE outcomes.state <> 'pending'
+   ),
+   ranked AS (
+     SELECT
+       root_run_id,
+       evaluation_id,
+       root_created_at,
+       ROW_NUMBER() OVER (
+         PARTITION BY evaluation_id
+         ORDER BY root_created_at DESC, root_run_id DESC
+       ) AS winner_rank
+     FROM terminal_families
+   )
+   SELECT root_run_id, evaluation_id, root_created_at, winner_rank FROM ranked`,
+  `CREATE VIEW IF NOT EXISTS v_global_effective_outcomes AS
+   SELECT effective.*
+   FROM v_effective_outcomes effective
+   JOIN v_evaluation_family_ranking ranking
+     ON ranking.evaluation_id = effective.evaluation_id
+    AND ranking.root_run_id = effective.root_run_id
+   WHERE ranking.winner_rank = 1`,
+  `CREATE VIEW IF NOT EXISTS v_global_evaluation_summary AS
+   SELECT
+     effective.root_run_id,
+     effective.evaluation_id,
+     COUNT(*) AS selected,
+     SUM(CASE WHEN effective.state = 'settled' THEN 1 ELSE 0 END) AS settled,
+     SUM(CASE WHEN effective.kind = 'correct' THEN 1 ELSE 0 END) AS correct,
+     SUM(CASE WHEN effective.kind = 'incorrect' THEN 1 ELSE 0 END) AS incorrect,
+     SUM(CASE WHEN effective.kind = 'ambiguous' THEN 1 ELSE 0 END) AS ambiguous,
+     SUM(CASE WHEN effective.kind = 'invalid' THEN 1 ELSE 0 END) AS invalid,
+     SUM(CASE WHEN effective.kind = 'refused' THEN 1 ELSE 0 END) AS refused,
+     SUM(CASE WHEN effective.kind = 'truncated' THEN 1 ELSE 0 END) AS truncated,
+     SUM(CASE WHEN effective.state = 'pending' THEN 1 ELSE 0 END) AS pending,
+     SUM(CASE WHEN effective.state = 'failed' THEN 1 ELSE 0 END) AS failed,
+     SUM(CASE WHEN effective.state = 'indeterminate' THEN 1 ELSE 0 END) AS indeterminate,
+     SUM(CASE WHEN effective.state = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+     SUM(effective.attempt_count) AS attempts,
+     AVG(effective.request_latency_ms) AS mean_request_latency_ms,
+     AVG(effective.total_fixture_time_ms) AS mean_total_fixture_time_ms
+   FROM v_global_effective_outcomes effective
+   GROUP BY effective.root_run_id, effective.evaluation_id`,
+  `CREATE VIEW IF NOT EXISTS v_global_category_summary AS
+   SELECT
+     effective.root_run_id,
+     effective.evaluation_id,
+     fixtures.category,
+     COUNT(*) AS selected,
+     SUM(CASE WHEN effective.state = 'settled' THEN 1 ELSE 0 END) AS settled,
+     SUM(CASE WHEN effective.kind = 'correct' THEN 1 ELSE 0 END) AS correct
+   FROM v_global_effective_outcomes effective
+   JOIN fixtures ON fixtures.fixture_id = effective.fixture_id
+   GROUP BY effective.root_run_id, effective.evaluation_id, fixtures.category`,
+  `CREATE VIEW IF NOT EXISTS v_global_fixture_drilldown AS
+   SELECT
+     effective.root_run_id,
+     effective.evaluation_id,
+     effective.fixture_id,
+     effective.run_id AS effective_run_id,
+     effective.state,
+     effective.kind,
+     effective.parsed_answer,
+     effective.response_text,
+     effective.response_truncated,
+     effective.usage_known,
+     effective.usage_prompt_tokens,
+     effective.usage_completion_tokens,
+     effective.usage_total_tokens,
+     effective.usage_reasoning_tokens,
+     effective.cost_kind,
+     effective.cost_usd,
+     effective.request_latency_ms,
+     effective.total_fixture_time_ms,
+     effective.attempt_count,
+     effective.indeterminate,
+     effective.lineage_source_run_id,
+     effective.lineage_source_outcome_id,
+     fixtures.question,
+     fixtures.answer AS expected_answer,
+     fixtures.category,
+     fixtures.l2_category,
+     fixtures.bench,
+     fixtures.image_path,
+     fixtures.image_media_type,
+     fixtures.image_sha256,
+     fixtures.image_byte_length
+   FROM v_global_effective_outcomes effective
    JOIN fixtures ON fixtures.fixture_id = effective.fixture_id`,
 ];
 

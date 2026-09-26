@@ -4,11 +4,14 @@ import { getPublicationRepository } from "../../server/publication";
 
 export const prerender = false;
 
-/** All runs in the publication, newest first, with family roles. */
+/** Every run, newest first, with family roles and per-run attempt ledger totals. */
 export const GET: APIRoute = async (context) => {
   try {
     const repository = await getPublicationRepository(context);
-    return ok({ runs: repository.listRuns() });
+    return ok({
+      runs: repository.listRuns(),
+      attemptTotals: repository.listRunAttemptTotals(),
+    });
   } catch (error) {
     return failure(error);
   }

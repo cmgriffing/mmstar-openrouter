@@ -77,8 +77,11 @@ point. The TUI runs directly from source through Bun.
 
 Turbo runs `build`, `typecheck`, `lint`, and `test`, which are cacheable. All commands
 that can contact a provider or write benchmark artifacts — `validate`, `benchmark`,
-`resume`, `retry-failed`, `restart`, `export` — are declared with `"cache": false` in
-`turbo.json` so a repeated command always executes. `OPENROUTER_API_KEY` is declared as
+`resume`, `retry-failed`, `restart` — are declared with `"cache": false` in
+`turbo.json` so a repeated command always executes. `export` is a root orchestrator
+script (`cd apps/runner && bun run src/cli.ts export --out ../../publication`) rather
+than a Turbo task, so the runner working directory and the publication location are
+explicit. `OPENROUTER_API_KEY` is declared as
 a pass-through environment variable; credentials never appear in configuration files or
 run artifacts.
 
@@ -109,7 +112,9 @@ crash always leaves a complete previous file. `resume` reconstructs progress fro
 validated model files, `retry-failed` creates a linked recovery run, and `restart`
 creates a new primary run from the original frozen settings.
 
-`export --run ID|--latest` publishes the whole run family into `publication/`: a
+`export` with no selector publishes every run in the results root into
+`publication/`; `export --run ID` and `export --latest` stay targeted to the selected
+run's whole family. The publication is a
 normalized SQLite snapshot (`benchmark.sqlite`), content-addressed original images under
 `benchmark-images/`, and a `manifest.json` binding database hash, source hashes, and the
 image inventory. The build is verified before an atomic directory swap, so a failed
@@ -119,13 +124,16 @@ Command and recovery semantics are documented in `docs/runner.md`; the schema, v
 projection rules, and measured artifact sizes are documented in `docs/publication.md`.
 
 `packages/results/src/query/repository.ts` defines the read-only website contract over
-that snapshot: fixed parameterized statements (comparisons, categories, paginated
-fixture drilldown, fixture detail), page bounds, and no arbitrary SQL. `apps/web` builds
+that snapshot: fixed parameterized statements (publication-wide comparisons, categories,
+paginated fixture drilldown, fixture detail), page bounds, and no arbitrary SQL. Each
+evaluation resolves to its winning family (newest root with terminal outcomes), and the
+winning root travels with every row as provenance. `apps/web` builds
 the same Astro codebase for Node, Netlify, Vercel, and Cloudflare Workers; platform code
 is confined to where the database and WASM assets come from (`apps/web/src/server/publication.ts`,
 with sql.js as the WASM reader on every target). The frontend is server-rendered with one
-React island for drilldown filtering: comparisons, category matrices, fixture lineage, and
-attempt ledgers stay read-only and show unknown usage/cost as unknown rather than zero.
+React island for drilldown filtering: one comparison of all models (no family switcher),
+category matrices, fixture lineage, and attempt ledgers stay read-only and show unknown
+usage/cost as unknown rather than zero.
 Endpoint contracts, frontend behavior, per-target build/deploy commands, the deterministic
 UI fixture publication, and the measured runtime evidence are documented in
 `docs/website.md` and `docs/adr/0001-web-sqlite-reader.md`. Hosted Netlify/Vercel/

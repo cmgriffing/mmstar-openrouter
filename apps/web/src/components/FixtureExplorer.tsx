@@ -18,7 +18,6 @@ import {
 } from "../lib/view";
 
 export interface FixtureExplorerProps {
-  rootRunId: string;
   pageSize: number;
   initialPage: FixturePage;
   initialFilters: {
@@ -45,7 +44,7 @@ interface ApiBody {
 }
 
 export default function FixtureExplorer(props: FixtureExplorerProps) {
-  const { rootRunId, pageSize, initialPage, evaluations, categories } = props;
+  const { pageSize, initialPage, evaluations, categories } = props;
   const [filters, setFilters] = useState<Filters>({
     evaluationId: props.initialFilters.evaluationId,
     category: props.initialFilters.category,
@@ -74,7 +73,6 @@ export default function FixtureExplorer(props: FixtureExplorerProps) {
     setStatus("loading");
     setErrorMessage(null);
     const query = fixtureQueryString({
-      rootRunId,
       evaluationId: filters.evaluationId === "" ? undefined : filters.evaluationId,
       category: filters.category === "" ? undefined : filters.category,
       state: filters.state === "" ? undefined : filters.state,
@@ -104,7 +102,7 @@ export default function FixtureExplorer(props: FixtureExplorerProps) {
         setErrorMessage(error instanceof Error ? error.message : String(error));
       });
     return () => controller.abort();
-  }, [filters, offset, rootRunId, reloadToken]);
+  }, [filters, offset, reloadToken]);
 
   function updateFilter(patch: Partial<Filters>): void {
     setFilters((previous) => ({ ...previous, ...patch }));
@@ -118,7 +116,6 @@ export default function FixtureExplorer(props: FixtureExplorerProps) {
 
   function detailHref(row: FixtureSummary): string {
     const backQuery = fixtureQueryString({
-      rootRunId,
       evaluationId: filters.evaluationId === "" ? undefined : filters.evaluationId,
       category: filters.category === "" ? undefined : filters.category,
       state: filters.state === "" ? undefined : filters.state,
@@ -127,7 +124,6 @@ export default function FixtureExplorer(props: FixtureExplorerProps) {
       offset,
     });
     const params = new URLSearchParams({
-      rootRunId,
       evaluationId: row.evaluationId,
       fixtureId: row.fixtureId,
       back: `/fixtures?${backQuery}`,
@@ -251,7 +247,7 @@ export default function FixtureExplorer(props: FixtureExplorerProps) {
             <section className="table-wrap" aria-label="Fixture results">
               <table className="data-table fixture-table">
                 <caption>
-                  Effective outcomes across the run family; recovered fixtures count once.
+                  Effective outcomes across the whole publication; recovered fixtures count once.
                 </caption>
                 <thead>
                   <tr>
@@ -269,7 +265,7 @@ export default function FixtureExplorer(props: FixtureExplorerProps) {
                 <tbody>
                   {page.rows.map((row) => {
                     const outcome = outcomePresentation(row.state, row.kind);
-                    const recovered = row.effectiveRunId !== rootRunId;
+                    const recovered = row.effectiveRunId !== row.rootRunId;
                     return (
                       <tr key={`${row.evaluationId}/${row.fixtureId}`}>
                         <td data-label="Fixture">

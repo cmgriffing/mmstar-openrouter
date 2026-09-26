@@ -18,7 +18,6 @@ import {
 import {
   getPublicationRepository,
   PublicationUnavailableError,
-  resolveRootRunId,
 } from "../server/publication";
 
 export const prerender = false;
@@ -29,15 +28,13 @@ const fixtureId = params.get("fixtureId") ?? "";
 const back = parseBackTarget(params.get("back"));
 
 let detail: FixtureDetail | null = null;
-let rootRunId: string | null = null;
 let loadError: string | null = null;
 const missingSelection = evaluationId === "" || fixtureId === "";
 
 if (!missingSelection) {
   try {
     const repository = await getPublicationRepository({ request: Astro.request });
-    rootRunId = resolveRootRunId(repository, params.get("rootRunId") ?? undefined);
-    detail = repository.getFixtureDetail({ rootRunId, evaluationId, fixtureId });
+    detail = repository.getFixtureDetail({ evaluationId, fixtureId });
   } catch (error) {
     loadError =
       error instanceof PublicationUnavailableError
@@ -50,14 +47,12 @@ if (!missingSelection) {
 
 const outcome = detail === null ? null : outcomePresentation(detail.state, detail.kind);
 const lineage = detail === null ? null : recoveryLineage(detail);
-const recovered = detail !== null && rootRunId !== null && detail.effectiveRunId !== rootRunId;
-const backHref =
-  back ?? (rootRunId === null ? "/fixtures" : `/fixtures?rootRunId=${encodeURIComponent(rootRunId)}`);
+const recovered = detail !== null && detail.effectiveRunId !== detail.rootRunId;
+const backHref = back ?? "/fixtures";
 ---
 
 <Base
   title={detail === null ? "Fixture · MMStar · OpenRouter" : `Fixture ${detail.fixtureId} · MMStar`}
-  rootRunId={rootRunId ?? undefined}
   headerMeta={detail === null ? undefined : `evaluation ${detail.evaluationId}`}
 >
   {

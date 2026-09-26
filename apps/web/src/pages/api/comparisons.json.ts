@@ -1,16 +1,14 @@
 import type { APIRoute } from "astro";
-import { failure, ok, textParam } from "../../server/http";
-import { getPublicationRepository, resolveRootRunId } from "../../server/publication";
+import { failure, ok } from "../../server/http";
+import { getPublicationRepository } from "../../server/publication";
 
 export const prerender = false;
 
-/** Model/effort comparisons for one family (defaults to the newest root run). */
+/** Publication-wide model/effort comparisons. Any `rootRunId` is ignored. */
 export const GET: APIRoute = async (context) => {
   try {
-    const url = new URL(context.request.url);
     const repository = await getPublicationRepository(context);
-    const rootRunId = resolveRootRunId(repository, textParam(url, "rootRunId"));
-    return ok({ rootRunId, comparisons: repository.listComparisons(rootRunId) });
+    return ok({ comparisons: repository.listComparisons() });
   } catch (error) {
     return failure(error);
   }

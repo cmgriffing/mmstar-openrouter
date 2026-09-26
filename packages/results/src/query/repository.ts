@@ -9,8 +9,11 @@
  * a WASM reader in the deployed site.
  *
  * Effective-outcome semantics (one winner per family/evaluation/fixture,
- * recovery never double-counts) come from the views; comparisons add the
- * attempt ledger across the whole family so published costs are auditable.
+ * recovery never double-counts) come from the views. The comparison surface is
+ * publication-wide: the `v_global_*` views pick one winning family per
+ * evaluation (newest root with terminal outcomes) and expose that root as
+ * provenance, while comparisons add the attempt ledger across the winning
+ * family so published costs are auditable.
  */
 import { QueryValidationError } from "../errors";
 import type { SqliteDatabase, SqlRow, SqlValue } from "../publication/driver";
@@ -96,8 +99,33 @@ export interface CategoryComparison {
   accuracy: number | null;
 }
 
-export interface FixtureQuery {
+/** One winning family per evaluation; cheap enough for health/smoke checks. */
+export interface EvaluationWinner {
+  evaluationId: string;
   rootRunId: string;
+}
+
+/**
+ * Per-run attempt ledger totals across every evaluation the run attempted,
+ * including families shadowed in the comparison views, so published token and
+ * cost totals stay auditable through the read API.
+ */
+export interface RunAttemptTotals {
+  runId: string;
+  rootRunId: string;
+  attempts: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  reasoningTokens: number | null;
+  usageUnknownCount: number;
+  reportedUsd: number | null;
+  estimatedUsd: number | null;
+  knownUsd: number | null;
+  costUnknownCount: number;
+}
+
+export interface FixtureQuery {
   evaluationId?: string;
   category?: string;
   state?: OutcomeState;
@@ -197,14 +225,12 @@ export interface FixtureDetail extends FixtureSummary {
 export interface PublicationRepository {
   meta(): PublicationMeta;
   listRuns(rootRunId?: string): RunSummary[];
-  listComparisons(rootRunId: string): EvaluationComparison[];
-  listCategories(input: { rootRunId: string; evaluationId?: string }): CategoryComparison[];
-  listFixtures(query: FixtureQuery): FixturePage;
-  getFixtureDetail(input: {
-    rootRunId: string;
-    evaluationId: string;
-    fixtureId: string;
-  }): FixtureDetail | null;
+  listComparisons(): EvaluationComparison[];
+  listCategories(input?: { evaluationId?: string }): CategoryComparison[];
+  listFixtures(query?: FixtureQuery): FixturePage;
+  getFixtureDetail(input: { evaluationId: string; fixtureId: string }): FixtureDetail | null;
+  listEvaluationWinners(): EvaluationWinner[];
+  listRunAttemptTotals(): RunAttemptTotals[];
 }
 
 /** Create a bounded, read-only repository over an already-opened database. */
@@ -220,8 +246,7 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
     return rows.map(toRunSummary);
   };
 
-  const listComparisons = (rootRunId: string): EvaluationComparison[] => {
-    const root = requireId(rootRunId, "rootRunId");
+  const listComparisons = (): EvaluationComparison[] => {
     const rows = query(
       database,
       `SELECT
@@ -239,7 +264,7 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
          totals.estimated_usd AS family_estimated_usd,
          totals.known_usd AS family_known_usd,
          totals.cost_unknown_count AS family_cost_unknown_count
-       FROM v_evaluation_summary summary
+       FROM v_global_evaluation_summary summary
        JOIN evaluations ON evaluations.evaluation_id = summary.evaluation_id
        LEFT JOIN (
          SELECT
@@ -260,41 +285,36 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
        ) totals
          ON totals.root_run_id = summary.root_run_id
         AND totals.evaluation_id = summary.evaluation_id
-       WHERE summary.root_run_id = ?
        ORDER BY evaluations.model_alias, evaluations.reasoning_mode, summary.evaluation_id`,
-      [root],
+      [],
     );
     return rows.map(toEvaluationComparison);
   };
 
-  const listCategories = (input: {
-    rootRunId: string;
-    evaluationId?: string;
-  }): CategoryComparison[] => {
-    const root = requireId(input.rootRunId, "rootRunId");
-    const filters = ["summary.root_run_id = ?"];
-    const params: SqlValue[] = [root];
+  const listCategories = (input: { evaluationId?: string } = {}): CategoryComparison[] => {
+    const filters: string[] = [];
+    const params: SqlValue[] = [];
     if (input.evaluationId !== undefined) {
       filters.push("summary.evaluation_id = ?");
       params.push(requireId(input.evaluationId, "evaluationId"));
     }
+    const where = filters.length === 0 ? "" : `WHERE ${filters.join(" AND ")}`;
     const rows = query(
       database,
       `SELECT summary.*
-       FROM v_category_summary summary
-       WHERE ${filters.join(" AND ")}
+       FROM v_global_category_summary summary
+       ${where}
        ORDER BY summary.evaluation_id, summary.category`,
       params,
     );
     return rows.map(toCategoryComparison);
   };
 
-  const listFixtures = (input: FixtureQuery): FixturePage => {
-    const root = requireId(input.rootRunId, "rootRunId");
+  const listFixtures = (input: FixtureQuery = {}): FixturePage => {
     const limit = clampLimit(input.limit);
     const offset = clampOffset(input.offset);
-    const filters = ["drilldown.root_run_id = ?"];
-    const params: SqlValue[] = [root];
+    const filters: string[] = [];
+    const params: SqlValue[] = [];
     if (input.evaluationId !== undefined) {
       filters.push("drilldown.evaluation_id = ?");
       params.push(requireId(input.evaluationId, "evaluationId"));
@@ -311,10 +331,10 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
       filters.push("drilldown.kind = ?");
       params.push(requireEnum(input.kind, OUTCOME_KINDS, "kind"));
     }
-    const where = filters.join(" AND ");
+    const where = filters.length === 0 ? "" : `WHERE ${filters.join(" AND ")}`;
     const totalRow = query(
       database,
-      `SELECT COUNT(*) AS total FROM v_fixture_drilldown drilldown WHERE ${where}`,
+      `SELECT COUNT(*) AS total FROM v_global_fixture_drilldown drilldown ${where}`,
       params,
     )[0];
     const total = readNumber(totalRow?.total ?? 0);
@@ -341,8 +361,8 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
          drilldown.image_path,
          drilldown.image_media_type,
          drilldown.image_sha256
-       FROM v_fixture_drilldown drilldown
-       WHERE ${where}
+       FROM v_global_fixture_drilldown drilldown
+       ${where}
        ORDER BY drilldown.evaluation_id,
                 CAST(drilldown.fixture_id AS INTEGER),
                 drilldown.fixture_id
@@ -359,24 +379,25 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
   };
 
   const getFixtureDetail = (input: {
-    rootRunId: string;
     evaluationId: string;
     fixtureId: string;
   }): FixtureDetail | null => {
-    const root = requireId(input.rootRunId, "rootRunId");
     const evaluationId = requireId(input.evaluationId, "evaluationId");
     const fixtureId = requireId(input.fixtureId, "fixtureId");
     const outcomeRows = query(
       database,
       `SELECT drilldown.*
-       FROM v_fixture_drilldown drilldown
-       WHERE drilldown.root_run_id = ?
-         AND drilldown.evaluation_id = ?
+       FROM v_global_fixture_drilldown drilldown
+       WHERE drilldown.evaluation_id = ?
          AND drilldown.fixture_id = ?`,
-      [root, evaluationId, fixtureId],
+      [evaluationId, fixtureId],
     );
     const row = outcomeRows[0];
     if (row === undefined) return null;
+    // Lineage panels stay inside the winning family: outcomes and attempts from
+    // shadowed duplicate families are auditable in the ledger but are not part
+    // of this evaluation's published story.
+    const root = readString(row.root_run_id);
     const outcomes = query(
       database,
       `SELECT
@@ -443,6 +464,59 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
     };
   };
 
+  const listEvaluationWinners = (): EvaluationWinner[] => {
+    const rows = query(
+      database,
+      `SELECT ranking.evaluation_id, ranking.root_run_id
+       FROM v_evaluation_family_ranking ranking
+       WHERE ranking.winner_rank = 1
+       ORDER BY ranking.evaluation_id`,
+      [],
+    );
+    return rows.map((row) => ({
+      evaluationId: readString(row.evaluation_id),
+      rootRunId: readString(row.root_run_id),
+    }));
+  };
+
+  const listRunAttemptTotals = (): RunAttemptTotals[] => {
+    const rows = query(
+      database,
+      `SELECT
+         runs.run_id,
+         runs.root_run_id,
+         COALESCE(SUM(totals.attempts), 0) AS attempts,
+         SUM(totals.prompt_tokens) AS prompt_tokens,
+         SUM(totals.completion_tokens) AS completion_tokens,
+         SUM(totals.total_tokens) AS total_tokens,
+         SUM(totals.reasoning_tokens) AS reasoning_tokens,
+         COALESCE(SUM(totals.usage_unknown_count), 0) AS usage_unknown_count,
+         SUM(totals.reported_usd) AS reported_usd,
+         SUM(totals.estimated_usd) AS estimated_usd,
+         SUM(totals.known_usd) AS known_usd,
+         COALESCE(SUM(totals.cost_unknown_count), 0) AS cost_unknown_count
+       FROM runs
+       LEFT JOIN v_attempt_totals totals ON totals.run_id = runs.run_id
+       GROUP BY runs.run_id
+       ORDER BY runs.created_at DESC, runs.run_id DESC`,
+      [],
+    );
+    return rows.map((row) => ({
+      runId: readString(row.run_id),
+      rootRunId: readString(row.root_run_id),
+      attempts: readNumber(row.attempts),
+      promptTokens: readNullableNumber(row.prompt_tokens),
+      completionTokens: readNullableNumber(row.completion_tokens),
+      totalTokens: readNullableNumber(row.total_tokens),
+      reasoningTokens: readNullableNumber(row.reasoning_tokens),
+      usageUnknownCount: readNumber(row.usage_unknown_count),
+      reportedUsd: readNullableNumber(row.reported_usd),
+      estimatedUsd: readNullableNumber(row.estimated_usd),
+      knownUsd: readNullableNumber(row.known_usd),
+      costUnknownCount: readNumber(row.cost_unknown_count),
+    }));
+  };
+
   return {
     meta: () => {
       const rows = query(database, "SELECT key, value FROM publication_meta", []);
@@ -458,6 +532,8 @@ export function createPublicationRepository(database: SqliteDatabase): Publicati
     listCategories,
     listFixtures,
     getFixtureDetail,
+    listEvaluationWinners,
+    listRunAttemptTotals,
   };
 }
 

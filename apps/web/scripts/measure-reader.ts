@@ -61,25 +61,21 @@ const nodeRepository = createPublicationRepository(nodeDatabase);
 // First query is the coldest: it compiles the window-function views.
 const { value: meta, ms: firstQueryMs } = await timed(() => wasmRepository.meta());
 const { value: runs, ms: listRunsMs } = await timed(() => wasmRepository.listRuns());
-const rootRunId = runs.find((run) => run.isRoot)?.runId ?? runs[0]?.runId ?? "";
 const { value: comparisons, ms: comparisonsMs } = await timed(() =>
-  wasmRepository.listComparisons(rootRunId),
+  wasmRepository.listComparisons(),
 );
-const { value: categories, ms: categoriesMs } = await timed(() =>
-  wasmRepository.listCategories({ rootRunId }),
-);
+const { value: categories, ms: categoriesMs } = await timed(() => wasmRepository.listCategories());
 const { value: page, ms: fixturesMs } = await timed(() =>
-  wasmRepository.listFixtures({ rootRunId, limit: 50 }),
+  wasmRepository.listFixtures({ limit: 50 }),
 );
 const { value: deepPage, ms: deepFixturesMs } = await timed(() =>
-  wasmRepository.listFixtures({ rootRunId, limit: 50, offset: 100 }),
+  wasmRepository.listFixtures({ limit: 50, offset: 100 }),
 );
 const firstFixture = page.rows[0];
 const { value: detail, ms: detailMs } = await timed(() =>
   firstFixture === undefined
     ? null
     : wasmRepository.getFixtureDetail({
-        rootRunId,
         evaluationId: firstFixture.evaluationId,
         fixtureId: firstFixture.fixtureId,
       }),
@@ -121,11 +117,9 @@ report.memoryMiB = {
 // Warm medians for the view-backed queries (each call prepares a statement).
 const warmSamples: Record<string, number[]> = { comparisons: [], categories: [], fixtures: [] };
 for (let index = 0; index < 5; index += 1) {
-  warmSamples.comparisons.push((await timed(() => wasmRepository.listComparisons(rootRunId))).ms);
-  warmSamples.categories.push((await timed(() => wasmRepository.listCategories({ rootRunId }))).ms);
-  warmSamples.fixtures.push(
-    (await timed(() => wasmRepository.listFixtures({ rootRunId, limit: 50 }))).ms,
-  );
+  warmSamples.comparisons.push((await timed(() => wasmRepository.listComparisons())).ms);
+  warmSamples.categories.push((await timed(() => wasmRepository.listCategories())).ms);
+  warmSamples.fixtures.push((await timed(() => wasmRepository.listFixtures({ limit: 50 }))).ms);
 }
 report.warmMedianMs = Object.fromEntries(
   Object.entries(warmSamples).map(([key, samples]) => [key, median(samples)]),
@@ -162,18 +156,17 @@ function runOnNode(name: string): unknown {
     case "listRuns":
       return nodeRepository.listRuns();
     case "listComparisons":
-      return nodeRepository.listComparisons(rootRunId);
+      return nodeRepository.listComparisons();
     case "listCategories":
-      return nodeRepository.listCategories({ rootRunId });
+      return nodeRepository.listCategories();
     case "listFixtures":
-      return nodeRepository.listFixtures({ rootRunId, limit: 50 });
+      return nodeRepository.listFixtures({ limit: 50 });
     case "listFixtures:offset":
-      return nodeRepository.listFixtures({ rootRunId, limit: 50, offset: 100 });
+      return nodeRepository.listFixtures({ limit: 50, offset: 100 });
     case "getFixtureDetail":
       return firstFixture === undefined
         ? null
         : nodeRepository.getFixtureDetail({
-            rootRunId,
             evaluationId: firstFixture.evaluationId,
             fixtureId: firstFixture.fixtureId,
           });

@@ -44,10 +44,13 @@ pnpm benchmark --set <name>          # start a primary run (TUI on a TTY)
 pnpm resume --latest                 # continue pending/interrupted work
 pnpm retry-failed --latest           # linked recovery run for request failures
 pnpm restart --latest                # new primary run with the original selection
-pnpm export                          # publish JSON results as a validated SQLite artifact
+pnpm export                          # publish every run as a validated SQLite artifact
 ```
 
-`validate` and `export` are Turbo tasks with `"cache": false`. The four run commands
+`validate` is a Turbo task with `"cache": false`. `export` is a root orchestrator
+script that runs the runner CLI with `apps/runner` as its working directory (so frozen
+dataset and results-root paths resolve) and writes `<repo>/publication` for the website
+sync; the package-level `export` script remains for targeted runs. The four run commands
 intentionally bypass Turbo: their root scripts invoke
 `pnpm --filter @mmstar/runner <command>` with the user's arguments forwarded verbatim
 (for example `pnpm benchmark --set testing`), because Turbo would otherwise pipe or
@@ -83,7 +86,8 @@ request or a credential.
 3. `pnpm build` — runner CLI bundle and the default Astro build.
 4. `bun apps/runner/scripts/e2e-workflow.ts --workdir /tmp/mmstar-e2e` (or
    `pnpm --filter @mmstar/runner e2e`) — validate, interrupted run, resume,
-   retry-failed, restart, export, publication verification, and repository queries
+   retry-failed, restart, a duplicate primary family, targeted and selector-free
+   export, publication verification, and publication-wide repository queries
    against real dataset fixtures.
 5. Build the target website (`pnpm --filter @mmstar/web build:node|build:netlify|
    build:vercel|build:cloudflare`) against the publication from step 4 or a real run,

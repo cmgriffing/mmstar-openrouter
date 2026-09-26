@@ -21,23 +21,17 @@ import {
   categoryMatrix,
   comparisonCost,
   evaluationLabel,
-  familySettingIssues,
   isIncomplete,
+  publicationSettingIssues,
   runKindLabel,
   sortComparisons,
 } from "../lib/view";
-import {
-  getPublicationRepository,
-  PublicationUnavailableError,
-  resolveRootRunId,
-} from "../server/publication";
+import { getPublicationRepository, PublicationUnavailableError } from "../server/publication";
 
 export const prerender = false;
 
 interface Model {
-  rootRunId: string;
   runs: RunSummary[];
-  allRuns: RunSummary[];
   comparisons: EvaluationComparison[];
   categories: CategoryComparison[];
   meta: PublicationMeta;
@@ -48,14 +42,10 @@ let loadError: string | null = null;
 
 try {
   const repository = await getPublicationRepository({ request: Astro.request });
-  const requested = Astro.url.searchParams.get("rootRunId") ?? undefined;
-  const rootRunId = resolveRootRunId(repository, requested);
   model = {
-    rootRunId,
-    runs: repository.listRuns(rootRunId),
-    allRuns: repository.listRuns(),
-    comparisons: repository.listComparisons(rootRunId),
-    categories: repository.listCategories({ rootRunId }),
+    runs: repository.listRuns(),
+    comparisons: repository.listComparisons(),
+    categories: repository.listCategories(),
     meta: repository.meta(),
   };
 } catch (error) {
@@ -70,15 +60,20 @@ try {
 
 const runs = model?.runs ?? [];
 const comparisons = sortComparisons(model?.comparisons ?? []);
-const allRoots = (model?.allRuns ?? []).filter((run) => run.isRoot);
-const issues = familySettingIssues(runs);
+// The mixed-settings notice concerns the families that actually win rows: a
+// family shadowed by a newer duplicate cannot make the shown results less
+// like-for-like.
+const winningRoots = new Set(comparisons.map((row) => row.rootRunId));
+const winningRuns = runs.filter((run) => winningRoots.has(run.rootRunId));
+const issues = publicationSettingIssues(winningRuns);
 const incompleteRuns = runs.filter((run) => run.lifecycleState !== "completed");
 const matrix = categoryMatrix(model?.categories ?? []);
 
 const totalSettled = comparisons.reduce((sum, row) => sum + row.settled, 0);
 const totalSelected = comparisons.reduce((sum, row) => sum + row.selected, 0);
-const familyCoverage = totalSelected > 0 ? totalSettled / totalSelected : null;
-const setName = runs[0]?.setName ?? "—";
+const publicationCoverage = totalSelected > 0 ? totalSettled / totalSelected : null;
+const setNames = [...new Set(runs.map((run) => run.setName))];
+const setName = setNames.length === 1 ? setNames[0] : setNames.length === 0 ? "—" : "mixed";
 const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount ?? null;
 
 interface OutcomeChip {
@@ -117,8 +112,7 @@ function unresolvedSummary(row: EvaluationComparison): string {
 
 <Base
   title="Comparisons · MMStar · OpenRouter"
-  rootRunId={model?.rootRunId}
-  headerMeta={model === null ? undefined : `root run ${shortHash(model.rootRunId)} · exported ${formatDateTime(model.meta.createdAt)}`}
+  headerMeta={model === null ? undefined : `publication-wide · exported ${formatDateTime(model.meta.createdAt)}`}
 >
   {
     model === null ? (
@@ -157,36 +151,22 @@ function unresolvedSummary(row: EvaluationComparison): string {
               <dd>{formatCount(fixturesPerEvaluation)}</dd>
             </div>
             <div>
-              <dt>Family coverage</dt>
-              <dd>{formatPercent(familyCoverage)}</dd>
+              <dt>Coverage</dt>
+              <dd>{formatPercent(publicationCoverage)}</dd>
             </div>
             <div>
               <dt>Exported</dt>
               <dd>{formatDateTime(model.meta.createdAt)}</dd>
             </div>
           </dl>
-          {allRoots.length > 1 && (
-            <nav class="run-selector" aria-label="Run families">
-              <span class="kicker">Family</span>
-              {allRoots.map((run) => (
-                <a
-                  href={`/?rootRunId=${encodeURIComponent(run.runId)}`}
-                  aria-current={run.runId === model?.rootRunId ? "true" : undefined}
-                  title={run.runId}
-                >
-                  {shortHash(run.runId, 18)} · {runKindLabel(run.runKind)}
-                </a>
-              ))}
-            </nav>
-          )}
         </section>
 
         {issues.length > 0 && (
           <section class="notice" role="alert">
             <h3>Mixed experiment settings</h3>
             <p>
-              This family's runs do not share the same frozen settings, so aggregated comparisons
-              are not like-for-like.
+              The winning families do not share the same frozen settings, so aggregated
+              comparisons are not like-for-like.
             </p>
             <ul>
               {issues.map((issue) => (
@@ -202,8 +182,8 @@ function unresolvedSummary(row: EvaluationComparison): string {
           <section class="notice" role="alert">
             <h3>Runs still incomplete</h3>
             <p>
-              Results below include effective outcomes from every run in the family; runs that never
-              reached a completed state are listed with their lifecycle state.
+              Results below use each evaluation's winning family; runs that never reached a
+              completed state are listed with their lifecycle state.
             </p>
             <ul>
               {incompleteRuns.map((run) => (
@@ -225,15 +205,15 @@ function unresolvedSummary(row: EvaluationComparison): string {
           </div>
           {comparisons.length === 0 ? (
             <div class="empty-panel">
-              <h2>No evaluations in this family</h2>
+              <h2>No evaluations in this publication</h2>
               <p>The publication contains runs but no evaluation records to compare.</p>
             </div>
           ) : (
             <div class="table-wrap" tabindex="0" role="region" aria-label="Model comparisons">
               <table class="data-table comparison-table">
                 <caption>
-                  Family-wide effective outcomes; recovery results replace failures, never add a
-                  second fixture.
+                  One winning family per evaluation: the newest family with terminal outcomes
+                  supplies every fixture; recovered results resolve once.
                 </caption>
                 <thead>
                   <tr>
@@ -270,12 +250,14 @@ function unresolvedSummary(row: EvaluationComparison): string {
                           <a
                             class="figure-sub"
                             href={`/fixtures?${new URLSearchParams({
-                              rootRunId: model?.rootRunId ?? "",
                               evaluationId: row.evaluationId,
                             }).toString()}`}
                           >
                             inspect fixtures →
                           </a>
+                          <span class="figure-sub" title={row.rootRunId}>
+                            family {shortHash(row.rootRunId, 14)}
+                          </span>
                         </td>
                         <td data-label="Effort">
                           <span class="mono">{row.reasoningMode}</span>
@@ -410,7 +392,7 @@ function unresolvedSummary(row: EvaluationComparison): string {
           <div class="section-head">
             <div>
               <p class="kicker">04 · Lineage</p>
-              <h2>Runs in this family</h2>
+              <h2>Runs in this publication</h2>
             </div>
             <p class="kicker">newest first</p>
           </div>
@@ -491,8 +473,8 @@ function unresolvedSummary(row: EvaluationComparison): string {
           </div>
           <p class="footnote">
             Schema v{model.meta.schemaVersion ?? "?"}, exporter v{model.meta.exporterVersion ?? "?"}.
-            Original records stay immutable; recovery children resolve into this family's effective
-            outcomes.
+            Original records stay immutable; each evaluation resolves to one winning family and
+            recovery children resolve into its effective outcomes.
           </p>
         </section>
       </>

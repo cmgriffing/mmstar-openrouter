@@ -19,7 +19,7 @@ mmstar <command> [options]
 | `resume ID\|--latest` | Continue pending/cancelled/interrupted work in an existing run. |
 | `retry-failed ID\|--latest` | Create a linked recovery run for unresolved request failures. |
 | `restart ID\|--latest` | Create a new primary run with the original fixtures and frozen settings. |
-| `export ID\|--latest` | Publish the selected run family as a validated SQLite snapshot with content-addressed images. |
+| `export [ID\|--latest]` | Publish every run in the results root (bare) or the selected run family as a validated SQLite snapshot with content-addressed images. |
 
 Exit codes: `0` success, `1` runtime failure (invalid run, provider halt, incomplete
 work), `2` usage or validation error, `130` interrupted before completion (SIGINT or a
@@ -130,14 +130,20 @@ plus lifecycle state; outcomes and attempts live in per-model files.
 
 ## Publication export
 
-`export --run ID` or `export --latest` turns durable run JSON into the immutable
-artifact the website deploys. `--out <dir>` changes the output directory (default
-`publication/`); the directory is Git-ignored. Exactly one selector is required, and
-export resolves the whole **family**: the topmost ancestor of the selected run plus all
-of its descendants, so restarts and recoveries travel together and the effective view
-can resolve each fixture exactly once.
+`export` with no selector exports **every** run in the results root into one
+publication. `export --run ID` (or a positional ID) and `export --latest` stay targeted:
+they export the selected run's whole **family** — the topmost ancestor plus all of its
+descendants — so restarts and recoveries travel together. `--out <dir>` changes the
+output directory (default `publication/`); the directory is Git-ignored. Combining an
+explicit run ID with `--latest` is a usage error.
+
+`pnpm export` from the repository root is the canonical, argument-free command: it runs
+the CLI with `apps/runner` as its working directory (so the frozen dataset and results
+root resolve correctly) and writes the artifact to `<repo>/publication`, where
+`apps/web/scripts/sync-publication.mjs` expects it.
 
 ```bash
+pnpm export                                  # every run -> <repo>/publication
 mmstar export --latest                       # newest primary run's family
 mmstar export --run 20260923T053337000Z_deadbeef --out publication
 ```
@@ -146,9 +152,17 @@ Export never makes a provider request and never needs an API key. It reloads the
 dataset named by the frozen plan and refuses to publish when the dataset SHA-256 no
 longer matches, when a selected fixture (or its image) is missing, when a run file is
 corrupt or uses an unsupported version, or when an identity conflict would mix two
-different experiments. The artifact is built in a temp directory and verified before
+different experiments (the error names the offending run). A bare export validates
+every run in the results root all-or-nothing: one corrupt run fails the whole command.
+The artifact is built in a temp directory and verified before
 the previous publication is replaced, so a failed export always leaves the last valid
-publication in place. See `docs/publication.md` for the layout, schema, and views.
+publication in place.
+
+The publication is schema v2: each family's effective outcomes stay the inner layer, and
+publication-wide views pick, per evaluation, the newest family with terminal outcomes, so
+the website shows one comparison of every model without a family selector. Publications
+built by exporter v1 are rejected; re-export them. See `docs/publication.md` for the
+layout, schema, and views.
 
 ## Single writer, atomic checkpoints
 

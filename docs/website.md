@@ -43,16 +43,16 @@ unavailable publication returns `503`.
 
 | Endpoint | Parameters | Notes |
 | --- | --- | --- |
-| `GET /api/health.json` | — | Reader/schema versions, family root, run count. |
-| `GET /api/runs.json` | — | Every run, newest first, with family roles. |
-| `GET /api/comparisons.json` | `rootRunId?` | Per-evaluation accuracy/coverage/latency/cost; defaults to the newest root run. |
-| `GET /api/categories.json` | `rootRunId?`, `evaluationId?` | Category counts and accuracy per evaluation. |
-| `GET /api/fixtures.json` | `rootRunId?`, `evaluationId?`, `category?`, `state?`, `kind?`, `limit?`, `offset?` | Paginated drilldown list; `limit` 1–200 (default 50), deterministic ordering. Response text is excluded. |
-| `GET /api/fixture.json` | `rootRunId?`, `evaluationId`, `fixtureId` | Effective outcome, family outcome lines, and the attempt ledger. |
+| `GET /api/health.json` | — | Reader/schema versions, run count, evaluation count, winning family roots. |
+| `GET /api/runs.json` | — | Every run, newest first, with family roles and per-run attempt/token/cost totals (shadowed families included). |
+| `GET /api/comparisons.json` | — | Publication-wide per-evaluation accuracy/coverage/latency/cost with winning-family provenance. |
+| `GET /api/categories.json` | `evaluationId?` | Publication-wide category counts and accuracy per evaluation. |
+| `GET /api/fixtures.json` | `evaluationId?`, `category?`, `state?`, `kind?`, `limit?`, `offset?` | Paginated publication-wide drilldown; `limit` 1–200 (default 50), deterministic ordering. Response text is excluded. |
+| `GET /api/fixture.json` | `evaluationId`, `fixtureId` | Effective outcome, winning-family outcome lines, and the attempt ledger. |
 
-`rootRunId` defaults to the newest family root, so a single-run publication needs
-no parameters. Unknown `state`/`kind` values and out-of-range pages are rejected
-before any SQL runs.
+All queries are publication-wide and require no scope. A `rootRunId` parameter in a
+URL is ignored: the response is identical to the same request without it. Unknown
+`state`/`kind` values and out-of-range pages are rejected before any SQL runs.
 
 Images are static assets: the `imagePath` returned by the API is a relative URL
 (`benchmark-images/<sha256>.<ext>`) served by the deployment host, never a Git
@@ -66,9 +66,9 @@ JavaScript and never opens a writable database.
 
 | Route | Behavior |
 | --- | --- |
-| `/` | Comparisons by model × effort (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost), a category accuracy matrix, and the family's lineage table. |
-| `/fixtures?rootRunId&evaluationId&category&state&kind&offset` | Paginated fixture drilldown (25 per page) over effective outcomes, with recovered/indeterminate badges; filtering re-queries `/api/fixtures.json` and keeps the URL shareable. |
-| `/fixture?rootRunId&evaluationId&fixtureId&back` | One fixture: original image, question, effective outcome, parsed/expected answer, response text, usage/cost, failure details, outcome lineage (effective vs superseded), and the attempt ledger. |
+| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a category accuracy matrix, and the full run lineage table. A family switcher is deliberately absent. |
+| `/fixtures?evaluationId&category&state&kind&offset` | Paginated fixture drilldown (25 per page) over publication-wide effective outcomes, with recovered/indeterminate badges; filtering re-queries `/api/fixtures.json` and keeps the URL shareable. |
+| `/fixture?evaluationId&fixtureId&back` | One fixture: original image, question, effective outcome, parsed/expected answer, response text, usage/cost, failure details, outcome lineage (effective vs superseded), and the attempt ledger. |
 
 Presentation rules:
 
@@ -77,10 +77,15 @@ Presentation rules:
 - Scored accuracy (correct/settled), selected accuracy (correct/selected),
   coverage (settled/selected), and attempt counts are labelled separately.
 - Recovery never double-counts: lists and comparisons show one effective
-  outcome per evaluation/fixture; the detail page keeps the superseded original
-  visible and marks the effective record.
+  outcome per evaluation/fixture from the winning family; the detail page keeps
+  the superseded original visible and marks the effective record. A newer family
+  that has settled only some fixtures wins that evaluation wholesale, so reduced
+  coverage is visible rather than silently stitched. A newer family that has only
+  failed still wins; `mmstar retry-failed` repairs an errored fixture inside that
+  winning family.
 - Incomplete evaluations carry an "incomplete" badge; runs that mix frozen
-  settings or never completed are called out above the comparisons.
+  settings in the winning families or never completed are called out above the
+  comparisons.
 - Statuses always combine a symbol and a label, focus is always visible, and
   tables become labelled cards on narrow screens.
 
@@ -92,9 +97,13 @@ bundle (types are imported with `import type` only).
 ### Reproducing the UI states
 
 `apps/web/scripts/seed-verification-publication.ts` builds a small deterministic
-publication that exercises recovery lineage, request failures, indeterminate
-attempts, pending work, mixed frozen settings, and known/estimated/unknown
-costs. It is a UI fixture, not a validated export:
+schema-v2 publication that exercises recovery lineage, request failures,
+indeterminate attempts, pending work, mixed frozen settings,
+known/estimated/unknown costs, and the winning-family rule (a newer restart family
+settles only `demo::low`, so that evaluation resolves to the newer family with
+reduced coverage while the older family's complete `demo::low` results are shadowed
+and `demo::high`/`demo::none` stay on the older family). It is a
+UI fixture, not a validated export:
 
 ```bash
 bun apps/web/scripts/seed-verification-publication.ts /tmp/mmstar-verification
@@ -142,9 +151,13 @@ Environment:
 ## Publishing and rollback
 
 Publishing is a redeploy: produce a new validation-passing publication with
-`mmstar export`, re-run the target build, and deploy. The deployed site remains
+`pnpm export` (or a targeted `mmstar export --run ID|--latest`), re-run the target
+build, and deploy. The deployed site remains
 on its current snapshot until then. Roll back by redeploying the previous
-immutable publication; there is no in-place database mutation to undo.
+immutable publication; there is no in-place database mutation to undo. Because the v2
+reader refuses an exporter-v1 database (schema/exporter version check) with a re-export
+message, roll forward by re-exporting rather than redeploying a v1 publication against
+a v2 site build.
 
 ## Verification status
 
@@ -167,11 +180,18 @@ Measured 2026-09-23 (macOS arm64, Node 24.16.0, Bun 1.4.2, workerd 1.20260923.1)
   still requires a real deploy and must not be described as verified until then.
   The release checklist in `docs/development.md` tracks this open item.
 
-Frontend behavior was checked in a real browser (agent-browser/Chromium) against
-the deterministic verification publication, 2026-09-24:
+Frontend behavior was last checked in a real browser (agent-browser/Chromium) against
+the deterministic verification publication, 2026-09-24, while the site still had a
+family switcher. The family-scoped checks below (filters, pagination, recovered
+detail, keyboard/overflow behavior) exercise code paths that survive the one-table
+change, but the switch itself has not been re-run in a browser. The v2 one-table view
+has been checked with server-rendered smoke against the seed publication (all
+evaluations in one table, winning-family provenance, mixed-settings notice, no
+`?rootRunId=` effect); re-run the browser pass before claiming it verified.
 
-- comparisons render both families, including the incomplete and mixed-settings
-  notices, with effective-outcome counts (a recovered failure counts once);
+- comparisons render every family present in the publication, including the incomplete
+  and mixed-settings notices, with effective-outcome counts (a recovered failure counts
+  once);
 - fixture filters (evaluation/category/state/kind) re-query the API, pagination
   moves through pages with URL sync, empty results and aborted requests show the
   empty/error panels, and Retry recovers;

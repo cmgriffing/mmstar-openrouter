@@ -219,6 +219,7 @@ function insertOutcome(
     costUsd: number | null;
     failureCategory?: string;
     failureMessage?: string;
+    evaluationId?: string;
   },
 ): void {
   database
@@ -234,7 +235,7 @@ function insertOutcome(
     )
     .run(
       outcome.runId,
-      "eval-a",
+      outcome.evaluationId ?? "eval-a",
       outcome.fixtureId,
       outcome.state,
       outcome.kind,
@@ -271,12 +272,13 @@ function insertAttempt(
     costUsd: number | null;
     failureCategory?: string;
     failureMessage?: string;
+    evaluationId?: string;
   },
 ): void {
   const params: SqlValue[] = [
     attempt.runId,
     attempt.attemptId,
-    "eval-a",
+    attempt.evaluationId ?? "eval-a",
     attempt.fixtureId,
     attempt.attemptNumber,
     attempt.state,
@@ -314,12 +316,148 @@ function insertAttempt(
     .run(...params);
 }
 
+interface SimpleOutcome {
+  fixtureId: string;
+  state: string;
+  kind: string | null;
+  evaluationId?: string;
+  usageKnown?: boolean;
+  costKind?: string;
+  costUsd?: number | null;
+}
+
+interface SimpleFamily {
+  rootId: string;
+  createdAt: string;
+  outcomes: SimpleOutcome[];
+  recovery?: { runId: string; createdAt: string; outcomes: SimpleOutcome[] };
+}
+
+/** A run plus optional recovery child, with one outcome and attempt per fixture. */
+function insertSimpleFamily(database: SqliteDatabase, family: SimpleFamily): void {
+  insertRun(database, {
+    runId: family.rootId,
+    rootRunId: family.rootId,
+    runKind: "primary",
+    parentRunId: null,
+    createdAt: family.createdAt,
+    updatedAt: family.createdAt,
+    lifecycleState: "completed",
+    fixtureCount: family.outcomes.length,
+    recoveredFixtureCount: 0,
+  });
+  for (const outcome of family.outcomes) insertSimpleOutcome(database, family.rootId, outcome);
+  if (family.recovery === undefined) return;
+  insertRun(database, {
+    runId: family.recovery.runId,
+    rootRunId: family.rootId,
+    runKind: "recovery",
+    parentRunId: family.rootId,
+    createdAt: family.recovery.createdAt,
+    updatedAt: family.recovery.createdAt,
+    lifecycleState: "completed",
+    fixtureCount: family.recovery.outcomes.length,
+    recoveredFixtureCount: family.recovery.outcomes.length,
+  });
+  for (const outcome of family.recovery.outcomes) {
+    insertSimpleOutcome(database, family.recovery.runId, outcome);
+  }
+}
+
+function insertSimpleOutcome(
+  database: SqliteDatabase,
+  runId: string,
+  outcome: SimpleOutcome,
+): void {
+  const evaluationId = outcome.evaluationId ?? "eval-a";
+  const usageKnown = outcome.usageKnown ?? true;
+  const costKind = outcome.costKind ?? "reported";
+  const costUsd = outcome.costUsd === undefined ? (usageKnown ? 0.01 : null) : outcome.costUsd;
+  insertOutcome(database, {
+    runId,
+    evaluationId,
+    fixtureId: outcome.fixtureId,
+    state: outcome.state,
+    kind: outcome.kind,
+    parsedAnswer: outcome.kind === null ? null : "A",
+    usageKnown,
+    costKind,
+    costUsd,
+  });
+  // Pending work has no physical provider call yet, so it has no attempt row.
+  if (outcome.state === "pending") return;
+  insertAttempt(database, {
+    runId,
+    attemptId: `${runId}:${outcome.fixtureId}`,
+    evaluationId,
+    fixtureId: outcome.fixtureId,
+    attemptNumber: 1,
+    state: "completed",
+    usageKnown,
+    costKind,
+    costUsd,
+  });
+}
+
+/** Schema plus one evaluation and three fixtures; families are added per test. */
+function duplicateFamilyDatabase(): SqliteDatabase {
+  const database = openSqliteDatabase(":memory:");
+  databases.push(database);
+  createPublicationSchema(database);
+  database
+    .prepare("INSERT INTO publication_meta (key, value) VALUES (?, ?)")
+    .run("created_at", "2026-01-01T00:00:00.000Z");
+  database
+    .prepare(
+      `INSERT INTO evaluations
+         (evaluation_id, model_alias, open_router_id, reasoning_mode, rate_limit_group)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run("eval-a", "alpha", "vendor/alpha", "high", "alpha-group");
+  for (const [fixtureId, category] of [
+    ["1", "biology"],
+    ["2", "biology"],
+    ["3", "chemistry"],
+  ] as const) {
+    database
+      .prepare(
+        `INSERT INTO fixtures
+           (fixture_id, question, answer, category, l2_category, bench,
+            image_sha256, image_path, image_media_type, image_byte_length)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        fixtureId,
+        `question ${fixtureId}`,
+        "A",
+        category,
+        `${category}-l2`,
+        "mmstar",
+        `sha-${fixtureId}`,
+        `benchmark-images/sha-${fixtureId}.png`,
+        "image/png",
+        10,
+      );
+  }
+  return database;
+}
+
+const completeFamily = (rootId: string, createdAt: string, kind: string): SimpleFamily => ({
+  rootId,
+  createdAt,
+  outcomes: [
+    { fixtureId: "1", state: "settled", kind },
+    { fixtureId: "2", state: "settled", kind },
+    { fixtureId: "3", state: "settled", kind },
+  ],
+});
+
 describe("createPublicationRepository", () => {
   it("reports publication metadata", () => {
     const repository = createPublicationRepository(seedDatabase());
     expect(repository.meta()).toEqual({
-      schemaVersion: 1,
-      exporterVersion: 1,
+      schemaVersion: 2,
+      exporterVersion: 2,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
   });
@@ -339,12 +477,13 @@ describe("createPublicationRepository", () => {
     expect(repository.listRuns("missing")).toEqual([]);
   });
 
-  it("builds family comparisons over effective outcomes and the full attempt ledger", () => {
+  it("builds publication-wide comparisons over effective outcomes and the full attempt ledger", () => {
     const repository = createPublicationRepository(seedDatabase());
-    const comparisons = repository.listComparisons("root-run");
+    const comparisons = repository.listComparisons();
     expect(comparisons).toHaveLength(1);
     const comparison = comparisons[0];
     expect(comparison).toMatchObject({
+      rootRunId: "root-run",
       evaluationId: "eval-a",
       modelAlias: "alpha",
       reasoningMode: "high",
@@ -369,45 +508,41 @@ describe("createPublicationRepository", () => {
 
   it("groups category accuracy by evaluation", () => {
     const repository = createPublicationRepository(seedDatabase());
-    const categories = repository.listCategories({ rootRunId: "root-run" });
+    const categories = repository.listCategories();
     expect(categories.map((category) => category.category)).toEqual(["biology", "chemistry"]);
     expect(categories[0]).toMatchObject({ selected: 2, settled: 2, correct: 1, accuracy: 0.5 });
     expect(categories[1]).toMatchObject({ selected: 1, settled: 1, correct: 1, accuracy: 1 });
-    expect(
-      repository.listCategories({ rootRunId: "root-run", evaluationId: "eval-a" }),
-    ).toHaveLength(2);
+    expect(repository.listCategories({ evaluationId: "eval-a" })).toHaveLength(2);
+    expect(repository.listCategories({ evaluationId: "missing" })).toEqual([]);
   });
 
   it("paginates fixture drilldown deterministically and filters by category and kind", () => {
     const repository = createPublicationRepository(seedDatabase());
-    const first = repository.listFixtures({ rootRunId: "root-run", limit: 2 });
+    const first = repository.listFixtures({ limit: 2 });
     expect(first.total).toBe(3);
     expect(first.rows.map((row) => row.fixtureId)).toEqual(["1", "2"]);
     expect(first.hasMore).toBe(true);
-    const second = repository.listFixtures({ rootRunId: "root-run", limit: 2, offset: 2 });
+    const second = repository.listFixtures({ limit: 2, offset: 2 });
     expect(second.rows.map((row) => row.fixtureId)).toEqual(["3"]);
     expect(second.hasMore).toBe(false);
     expect(second.rows[0]).toMatchObject({
+      rootRunId: "root-run",
       state: "settled",
       kind: "correct",
       effectiveRunId: "recovery-run",
       attemptCount: 1,
     });
-    const chemistry = repository.listFixtures({
-      rootRunId: "root-run",
-      category: "chemistry",
-    });
+    const chemistry = repository.listFixtures({ category: "chemistry" });
     expect(chemistry.rows.map((row) => row.fixtureId)).toEqual(["3"]);
-    const correct = repository.listFixtures({ rootRunId: "root-run", kind: "correct" });
+    const correct = repository.listFixtures({ kind: "correct" });
     expect(correct.rows.map((row) => row.fixtureId)).toEqual(["1", "3"]);
-    const failed = repository.listFixtures({ rootRunId: "root-run", state: "failed" });
+    const failed = repository.listFixtures({ state: "failed" });
     expect(failed.total).toBe(0);
   });
 
   it("returns effective detail with family outcomes and ordered attempts", () => {
     const repository = createPublicationRepository(seedDatabase());
     const detail = repository.getFixtureDetail({
-      rootRunId: "root-run",
       evaluationId: "eval-a",
       fixtureId: "3",
     });
@@ -433,7 +568,6 @@ describe("createPublicationRepository", () => {
     ]);
     expect(
       repository.getFixtureDetail({
-        rootRunId: "root-run",
         evaluationId: "eval-a",
         fixtureId: "999",
       }),
@@ -442,29 +576,205 @@ describe("createPublicationRepository", () => {
 
   it("rejects out-of-range and unknown query parameters before querying", () => {
     const repository = createPublicationRepository(seedDatabase());
-    const root = "root-run";
-    expect(() => repository.listFixtures({ rootRunId: root, limit: 0 })).toThrow(
+    expect(() => repository.listFixtures({ limit: 0 })).toThrow(QueryValidationError);
+    expect(() => repository.listFixtures({ limit: 201 })).toThrow(QueryValidationError);
+    expect(() => repository.listFixtures({ limit: 1.5 })).toThrow(QueryValidationError);
+    expect(() => repository.listFixtures({ offset: -1 })).toThrow(QueryValidationError);
+    expect(() => repository.listFixtures({ state: "broken" as never })).toThrow(
       QueryValidationError,
     );
-    expect(() => repository.listFixtures({ rootRunId: root, limit: 201 })).toThrow(
+    expect(() => repository.listFixtures({ kind: "maybe" as never })).toThrow(QueryValidationError);
+    expect(() => repository.listFixtures({ evaluationId: "" })).toThrow(QueryValidationError);
+    expect(() => repository.listCategories({ evaluationId: "x".repeat(201) })).toThrow(
       QueryValidationError,
     );
-    expect(() => repository.listFixtures({ rootRunId: root, limit: 1.5 })).toThrow(
-      QueryValidationError,
+  });
+
+  it("resolves a duplicate evaluation to the newer family wholesale", () => {
+    const database = duplicateFamilyDatabase();
+    insertSimpleFamily(database, completeFamily("old-root", "2026-01-01T00:00:00.000Z", "correct"));
+    insertSimpleFamily(database, {
+      rootId: "new-root",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      outcomes: [
+        { fixtureId: "1", state: "settled", kind: "incorrect" },
+        { fixtureId: "2", state: "settled", kind: "correct" },
+        { fixtureId: "3", state: "settled", kind: "incorrect" },
+      ],
+    });
+    const repository = createPublicationRepository(database);
+    const comparisons = repository.listComparisons();
+    expect(comparisons).toHaveLength(1);
+    expect(comparisons[0]).toMatchObject({
+      rootRunId: "new-root",
+      selected: 3,
+      settled: 3,
+      correct: 1,
+      incorrect: 2,
+      coverage: 1,
+      attempts: 3,
+    });
+    expect(comparisons[0]?.scoredAccuracy).toBeCloseTo(1 / 3);
+
+    const page = repository.listFixtures({});
+    expect(page.rows.map((row) => [row.fixtureId, row.kind, row.effectiveRunId])).toEqual([
+      ["1", "incorrect", "new-root"],
+      ["2", "correct", "new-root"],
+      ["3", "incorrect", "new-root"],
+    ]);
+
+    const detail = repository.getFixtureDetail({ evaluationId: "eval-a", fixtureId: "1" });
+    expect(detail?.effectiveRunId).toBe("new-root");
+    expect(detail?.outcomes.map((outcome) => outcome.runId)).toEqual(["new-root"]);
+
+    // Superseded attempts stay published and per-run totals remain queryable.
+    const attempts = database.prepare("SELECT COUNT(*) AS n FROM attempts").get();
+    expect(Number(attempts?.n)).toBe(6);
+    const oldTotals = database
+      .prepare("SELECT attempts FROM v_attempt_totals WHERE run_id = ?")
+      .get("old-root");
+    expect(Number(oldTotals?.attempts)).toBe(3);
+
+    // The read API exposes the winner and per-run ledger totals so shadowed
+    // families stay auditable without direct SQL access.
+    expect(repository.listEvaluationWinners()).toEqual([
+      { evaluationId: "eval-a", rootRunId: "new-root" },
+    ]);
+    const totals = repository.listRunAttemptTotals();
+    expect(
+      totals.map((row) => [row.runId, row.attempts, row.totalTokens, row.usageUnknownCount]),
+    ).toEqual([
+      ["new-root", 3, 330, 0],
+      ["old-root", 3, 330, 0],
+    ]);
+    expect(totals[0]?.knownUsd).toBeCloseTo(0.03);
+    expect(totals[0]?.costUnknownCount).toBe(0);
+  });
+
+  it("lets a partially settled newer family win wholesale with reduced coverage", () => {
+    const database = duplicateFamilyDatabase();
+    insertSimpleFamily(database, completeFamily("old-root", "2026-01-01T00:00:00.000Z", "correct"));
+    insertSimpleFamily(database, {
+      rootId: "new-root",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      outcomes: [
+        { fixtureId: "1", state: "settled", kind: "incorrect" },
+        { fixtureId: "2", state: "pending", kind: null },
+        { fixtureId: "3", state: "pending", kind: null },
+      ],
+    });
+    const repository = createPublicationRepository(database);
+    const comparison = repository.listComparisons()[0];
+    expect(comparison).toMatchObject({
+      rootRunId: "new-root",
+      selected: 3,
+      settled: 1,
+      correct: 0,
+      incorrect: 1,
+      pending: 2,
+    });
+    expect(comparison?.coverage).toBeCloseTo(1 / 3);
+    expect(comparison?.selectedAccuracy).toBe(0);
+
+    // The older family's settled rows are not stitched in to fill the gap.
+    const page = repository.listFixtures({});
+    expect(page.rows.map((row) => [row.fixtureId, row.state, row.effectiveRunId])).toEqual([
+      ["1", "settled", "new-root"],
+      ["2", "pending", "new-root"],
+      ["3", "pending", "new-root"],
+    ]);
+  });
+
+  it("never lets a pending-only newer family win", () => {
+    const database = duplicateFamilyDatabase();
+    insertSimpleFamily(database, completeFamily("old-root", "2026-01-01T00:00:00.000Z", "correct"));
+    insertSimpleFamily(database, {
+      rootId: "new-root",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      outcomes: [
+        { fixtureId: "1", state: "pending", kind: null },
+        { fixtureId: "2", state: "pending", kind: null },
+        { fixtureId: "3", state: "pending", kind: null },
+      ],
+    });
+    const repository = createPublicationRepository(database);
+    const comparison = repository.listComparisons()[0];
+    expect(comparison).toMatchObject({
+      rootRunId: "old-root",
+      selected: 3,
+      settled: 3,
+      correct: 3,
+      coverage: 1,
+    });
+    const page = repository.listFixtures({});
+    expect(page.rows.every((row) => row.effectiveRunId === "old-root")).toBe(true);
+    expect(page.rows.every((row) => row.kind === "correct")).toBe(true);
+
+    expect(repository.listEvaluationWinners()).toEqual([
+      { evaluationId: "eval-a", rootRunId: "old-root" },
+    ]);
+    expect(repository.listRunAttemptTotals().find((row) => row.runId === "new-root")).toMatchObject(
+      { attempts: 0, totalTokens: null, usageUnknownCount: 0 },
     );
-    expect(() => repository.listFixtures({ rootRunId: root, offset: -1 })).toThrow(
-      QueryValidationError,
-    );
-    expect(() => repository.listFixtures({ rootRunId: root, state: "broken" as never })).toThrow(
-      QueryValidationError,
-    );
-    expect(() => repository.listFixtures({ rootRunId: root, kind: "maybe" as never })).toThrow(
-      QueryValidationError,
-    );
-    expect(() => repository.listFixtures({ rootRunId: "" })).toThrow(QueryValidationError);
-    expect(() => repository.listComparisons("")).toThrow(QueryValidationError);
-    expect(() =>
-      repository.listCategories({ rootRunId: root, evaluationId: "x".repeat(201) }),
-    ).toThrow(QueryValidationError);
+  });
+
+  it("keeps recovery stitching inside the winning family", () => {
+    const database = duplicateFamilyDatabase();
+    insertSimpleFamily(database, {
+      rootId: "old-root",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      outcomes: [
+        { fixtureId: "1", state: "settled", kind: "correct" },
+        { fixtureId: "2", state: "settled", kind: "correct" },
+        {
+          fixtureId: "3",
+          state: "failed",
+          kind: null,
+          usageKnown: false,
+          costKind: "unknown",
+          costUsd: null,
+        },
+      ],
+      recovery: {
+        runId: "old-recovery",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        outcomes: [{ fixtureId: "3", state: "settled", kind: "correct" }],
+      },
+    });
+    // A newer family with nothing terminal must not blank the recovered row.
+    insertSimpleFamily(database, {
+      rootId: "new-root",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      outcomes: [
+        { fixtureId: "1", state: "pending", kind: null },
+        { fixtureId: "2", state: "pending", kind: null },
+        { fixtureId: "3", state: "pending", kind: null },
+      ],
+    });
+    const repository = createPublicationRepository(database);
+    const comparison = repository.listComparisons()[0];
+    expect(comparison).toMatchObject({
+      rootRunId: "old-root",
+      settled: 3,
+      correct: 3,
+      failed: 0,
+      coverage: 1,
+    });
+
+    const detail = repository.getFixtureDetail({ evaluationId: "eval-a", fixtureId: "3" });
+    expect(detail).toMatchObject({
+      rootRunId: "old-root",
+      effectiveRunId: "old-recovery",
+      state: "settled",
+      kind: "correct",
+    });
+    // Each fixture resolves exactly once: the scored recovery outcome wins and
+    // the failed original stays visible as lineage, not as a second effective row.
+    expect(
+      detail?.outcomes.map((outcome) => [outcome.runId, outcome.state, outcome.isEffective]),
+    ).toEqual([
+      ["old-root", "failed", false],
+      ["old-recovery", "settled", true],
+    ]);
   });
 });

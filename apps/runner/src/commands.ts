@@ -66,7 +66,7 @@ export function formatCommandUsage(command: RunnerCommand): string {
     "retry-failed": "Create a recovery run for unresolved request failures.",
     restart: "Create a new primary run with the original fixtures and settings.",
     export:
-      "Export a run family into a validated SQLite publication with content-addressed images.",
+      "Export every run, or a selected run family, into a validated SQLite publication with content-addressed images.",
   };
   return [
     `Usage: mmstar ${command} [options]`,

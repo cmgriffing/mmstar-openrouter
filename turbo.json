@@ -18,9 +18,6 @@
     },
     "validate": {
       "cache": false
-    },
-    "export": {
-      "cache": false
     }
   }
 }

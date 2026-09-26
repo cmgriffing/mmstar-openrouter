@@ -22,7 +22,7 @@ import {
 } from "./rows";
 import { createPublicationSchema } from "./schema";
 import { openSqliteDatabase } from "./sqlite-node";
-import { verifyPublication } from "./verify";
+import { sha256Hex, verifyPublication } from "./verify";
 import { importPublicationRows } from "./write";
 
 const EXECUTION: ExecutionConfig = {
@@ -516,6 +516,44 @@ describe("publishPublication", () => {
     // A missing image file is equally fatal.
     rmSync(imagePath);
     expect(() => verifyPublication(outputDir)).toThrow(/image directory/);
+  });
+
+  it("rejects a v1 manifest and a database missing v2 views with a re-export message", async () => {
+    const root = tempDir();
+    const outputDir = join(root, "publication");
+    const source = makeManifest({ runId: "20260101T000000_aaaaaaaa" });
+    await publishPublication({
+      outputDir,
+      resultsRoot: join(root, "results"),
+      dataset: { path: "MMStar.tsv", sha256: "dataset-sha" },
+      runs: [makeProjection(source, [makeEvaluation()])],
+      fixtures: [fixtureInput("0")],
+      now: () => new Date("2026-01-03T00:00:00.000Z"),
+    });
+
+    // An exporter-v1 publication declares older versions and must not be read.
+    const manifestPath = join(outputDir, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      database: { sha256: string; byteLength: number };
+    };
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ ...manifest, schemaVersion: 1, exporterVersion: 1 }, null, 2)}\n`,
+    );
+    expect(() => verifyPublication(outputDir)).toThrow(/schema version 1/);
+    expect(() => verifyPublication(outputDir)).toThrow(/re-export/);
+
+    // Restore the manifest, then simulate a database missing a v2 global view.
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const database = openSqliteDatabase(join(outputDir, "benchmark.sqlite"));
+    database.exec("DROP VIEW v_global_evaluation_summary");
+    database.close();
+    const databaseBytes = readFileSync(join(outputDir, "benchmark.sqlite"));
+    manifest.database.sha256 = sha256Hex(databaseBytes);
+    manifest.database.byteLength = databaseBytes.byteLength;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expect(() => verifyPublication(outputDir)).toThrow(/v_global_evaluation_summary/);
+    expect(() => verifyPublication(outputDir)).toThrow(/re-export/);
   });
 
   it("restores a publication left moved aside by a crash before rebuilding", async () => {
