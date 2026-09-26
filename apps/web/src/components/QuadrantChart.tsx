@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { formatCount, formatPercent } from "../lib/format";
 import type {
+  ChartAxisBounds,
   ChartExclusion,
   ComparisonChartPoint,
   ComparisonMetric,
@@ -66,6 +67,11 @@ function tickLabel(metric: ComparisonMetric, value: number): string {
   return metricValueLabel(metric, value);
 }
 
+/** Metrics with a natural floor (and ceiling, for pass rate) never pad past them. */
+function axisBounds(metric: ComparisonMetric): ChartAxisBounds {
+  return metric === "pass" ? { min: 0, max: 1 } : { min: 0 };
+}
+
 function pointAriaLabel(point: ComparisonChartPoint) {
   return [
     `${point.modelAlias}, reasoning mode ${point.reasoningMode}`,
@@ -95,10 +101,12 @@ export default function QuadrantChart(props: QuadrantChartProps) {
   const xScale = buildChartAxisScale(
     points.map((point) => point.x),
     x === "cost" && costScale === "log",
+    axisBounds(x),
   );
   const yScale = buildChartAxisScale(
     points.map((point) => point.y),
     y === "cost" && costScale === "log",
+    axisBounds(y),
   );
 
   const screenX = (value: number): number =>

@@ -14,3 +14,14 @@ describe("hidden data-table rows", () => {
     expect(css).toMatch(/\.data-table tbody tr\[hidden\]\s*\{[^}]*display:\s*none/);
   });
 });
+
+/**
+ * Regression guard for the picker panel. It stays mounted after the first open
+ * and its author `display: flex` rule beats the user-agent `[hidden]` rule, so
+ * this override is what actually closes it.
+ */
+describe("hidden picker panel", () => {
+  it("re-asserts display:none for the hidden panel", () => {
+    expect(css).toMatch(/\.picker-panel\[hidden\]\s*\{[^}]*display:\s*none/);
+  });
+});

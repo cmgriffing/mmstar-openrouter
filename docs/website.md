@@ -19,7 +19,8 @@ apps/web/src/styles/global.css        field-report design system
 apps/web/src/lib/format.ts            pure value formatting (unknown vs zero)
 apps/web/src/lib/view.ts              outcome labels, filters, selection/axes/sorting, metrics
 apps/web/src/components/FixtureExplorer.tsx  drilldown island (filters, pages, states)
-apps/web/src/components/ComparisonExplorer.tsx  comparison island (model selector, chart, sortable table)
+apps/web/src/components/ComparisonExplorer.tsx  comparison island (picker host, chart, sortable table)
+apps/web/src/components/ModelPicker.tsx  searchable model/effort picker (trigger, panel, bulk actions)
 apps/web/src/components/QuadrantChart.tsx  hand-rolled SVG quadrant chart (points, medians, tooltip)
 apps/web/src/pages/index.astro        comparison island host + publication stat strip
 apps/web/src/pages/fixtures.astro     drilldown shell + island
@@ -68,7 +69,7 @@ JavaScript and never opens a writable database.
 
 | Route | Behavior |
 | --- | --- |
-| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a hand-rolled quadrant chart, a category accuracy matrix, and the full run lineage table. A model-grouped multi-select (URL `models`) filters the table, chart, and matrix together; `sort`/`dir` anchors order the table and `x`/`y`/`scale` choose the chart axes and cost scale. The stat strip and run lineage stay publication-wide. A family switcher is deliberately absent. |
+| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a hand-rolled quadrant chart, a category accuracy matrix, and the full run lineage table. A searchable model/effort picker backs the `models` selection and filters the table, chart, and matrix together; the trigger shows the selection count, and the panel searches alias/OpenRouter ID/effort and offers `Select all`, `Clear all`, and a filter-scoped matching action. `sort`/`dir` anchors order the table and `x`/`y`/`scale` choose the chart axes and cost scale. The stat strip and run lineage stay publication-wide. A family switcher is deliberately absent. |
 | `/fixtures?evaluationId&category&state&kind&offset` | Paginated fixture drilldown (25 per page) over publication-wide effective outcomes, with recovered/indeterminate badges; filtering re-queries `/api/fixtures.json` and keeps the URL shareable. |
 | `/fixture?evaluationId&fixtureId&back` | One fixture: original image, question, effective outcome, parsed/expected answer, response text, usage/cost, failure details, outcome lineage (effective vs superseded), and the attempt ledger. |
 
@@ -87,6 +88,18 @@ Presentation rules:
   and unknown parameter values are dropped and reported with the same
   ignored-filter notice as the drilldown; the canonical URL omits defaults and
   the all-selected case.
+- The picker trigger reads `N of M evaluations` and opens a non-modal panel on
+  demand. Search matches model alias, `openRouterId`, and effort name
+  case-insensitively; an alias/ID match shows all of a group's efforts, an
+  effort match shows only the matching rows, and the group checkbox and its
+  `selected/visible` count apply to exactly the rows visible under the current
+  filter. Efforts are ordered by intensity — `default` first, then `none`,
+  `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — not alphabetically.
+  `Select all`/`Clear all` keep the all-selected (`models` absent) and empty
+  (`models=`) URL states, and the filter-scoped footer action reads
+  `Select N matching` or `Deselect N matching`. Panel open state, search text,
+  and per-group expansion are ephemeral component state and never enter the
+  URL; selection changes are announced through a live region.
 - Table headers are anchors carrying `sort`/`dir`, so sorting works without
   JavaScript; hydration re-sorts in place and keeps the URL shareable. Null
   cost, token, and latency values always sort last in either direction, and
@@ -142,7 +155,10 @@ With that server running, the comparison island states can be reached directly:
 `/` (default cost × pass chart, three evaluations), `/?models=demo::low`
 (single selection, no median crosshairs), `/?models=` (empty states for chart,
 table, and matrix), `/?sort=cost&dir=asc`, `/?x=pass&y=cost&scale=linear`, and
-`/?models=ghost&x=nope` (ignored-filter notice).
+`/?models=ghost&x=nope` (ignored-filter notice). The picker itself has no URL
+state: open the trigger and search an alias, an OpenRouter ID, or an effort
+name to exercise filtering, filter-scoped group toggling, and the matching bulk
+action.
 
 ## Platform loading
 
@@ -218,12 +234,12 @@ the deterministic verification publication, 2026-09-24, while the site still had
 family switcher. The family-scoped checks below (filters, pagination, recovered
 detail, keyboard/overflow behavior) exercise code paths that survive the one-table
 change, but the switch itself has not been re-run in a browser. The v2 one-table view
-has been checked with server-rendered smoke against the seed publication (all
+has been checked with server-rendered smoke against the seed results (all
 evaluations in one table, winning-family provenance, mixed-settings notice, no
 `?rootRunId=` effect).
 
 The comparison island (model selector, quadrant chart, sortable table) was checked in
-a real browser on 2026-09-25 against both the seed publication and an export of the
+a real browser on 2026-09-25 against both the seed results and an export of the
 two-run results in `apps/runner/results`: group and effort toggles kept table, chart,
 and category matrix in sync and updated the URL; sort anchors re-sorted in place with
 `aria-sort` and also worked by plain navigation with JavaScript disabled; selecting
@@ -239,6 +255,23 @@ to override the `hidden` attribute; `/?models=demo::low` now hides the other mat
 rows there, and `styles/global.test.ts` guards the override rule. The remaining
 drilldown/keyboard checks from the 2026-09-24 pass still apply to unchanged code but
 have not been repeated.
+
+The searchable model picker replaced the inline grid and was checked in a real browser
+on 2026-09-25 against the seed results: the trigger counted `N of M evaluations`;
+opening focused the search field; alias, OpenRouter-ID, and effort queries filtered
+case-insensitively (`high` narrowed each matching group to its single visible row);
+the group checkbox and `selected/visible` count affected only the visible rows;
+`Select all`/`Clear all` produced the `/` and `?models=` URL states, and the
+filter-scoped `Select/Deselect N matching` action selected or deselected exactly the
+visible rows; the panel stayed open across toggles; Escape closed it and returned
+focus to the trigger, and outside activation closed it without moving focus; the live
+region carried the count; efforts rendered in intensity order (`none`, `low`, `high`);
+and no picker state entered the URL. Existing `?models=` URLs still restored the
+selection and `?models=ghost` kept the ignored-filter notice. The panel also dismisses
+when focus moves outside it; that behavior was added after the 2026-09-25 pass and
+awaits a browser re-check. Narrow-screen layout was checked at 400 px: the trigger
+spans the selector bar, the panel stays anchored, and the page has no horizontal
+overflow.
 
 - comparisons render every family present in the publication, including the incomplete
   and mixed-settings notices, with effective-outcome counts (a recovered failure counts
