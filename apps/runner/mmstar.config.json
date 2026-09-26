@@ -15,12 +15,38 @@
     "space-bunny-alpha": {
       "openRouterId": "stealth/space-bunny-alpha",
       "reasoningModes": ["low"],
-      "rateLimitGroup": "testing-group"
+      "rateLimitGroup": "testing-group1"
+    },
+    "qwen3.8-27b": {
+      "openRouterId": "qwen/qwen3.8-27b:free",
+      "reasoningModes": ["low"],
+      "rateLimitGroup": "testing-group2"
+    },
+    "gemma-4-26b-a4b-it": {
+      "openRouterId": "google/gemma-4-26b-a4b-it:free",
+      "reasoningModes": ["default"],
+      "rateLimitGroup": "testing-group3"
+    },
+    "gemma-4-31b-it": {
+      "openRouterId": "google/gemma-4-31b-it:free",
+      "reasoningModes": ["default"],
+      "rateLimitGroup": "testing-group3"
+    },
+    "nemotron-3-nano-omni-30b-a3b-reasoning": {
+      "openRouterId": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "reasoningModes": ["default"],
+      "rateLimitGroup": "testing-group4"
     }
   },
   "sets": {
     "testing": {
-      "models": ["space-bunny-alpha"]
+      "models": [
+        "space-bunny-alpha",
+        "qwen3.8-27b",
+        "gemma-4-26b-a4b-it",
+        "gemma-4-31b-it",
+        "nemotron-3-nano-omni-30b-a3b-reasoning"
+      ]
     }
   }
 }
