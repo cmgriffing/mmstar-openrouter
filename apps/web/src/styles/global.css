@@ -717,6 +717,300 @@ main {
   text-decoration: underline;
 }
 
+/* ------------------------------------------------------- comparison island */
+
+.comparison-island {
+  display: grid;
+  gap: 16px;
+}
+
+.selector-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px 18px;
+  align-items: start;
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+  padding: 12px 16px 14px;
+}
+
+.model-selector {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.model-selector legend {
+  padding: 0 0 8px;
+}
+
+.model-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.model-group {
+  border-left: 2px solid var(--rule-strong);
+  padding-left: 10px;
+}
+
+.model-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.model-group-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.model-group-count {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+.effort-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 4px;
+}
+
+.effort-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.model-selector input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.selector-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selector-tools .status-line {
+  min-height: auto;
+  margin: 0 4px 0 0;
+}
+
+.chart-figure {
+  margin: 0;
+}
+
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  padding: 10px 0 4px;
+}
+
+.field-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 4px;
+}
+
+.chart-scale {
+  display: flex;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.chart-scale .button {
+  border-radius: 0;
+}
+
+.chart-scale .button.is-active {
+  background: var(--ink);
+  color: var(--paper-raised);
+  border-color: var(--ink);
+}
+
+.chart-canvas {
+  position: relative;
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+}
+
+.chart-canvas svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-plot {
+  fill: var(--paper);
+  stroke: var(--rule);
+}
+
+.chart-tick line {
+  stroke: var(--rule-strong);
+}
+
+.chart-tick text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--ink-faint);
+}
+
+.chart-axis-title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  fill: var(--ink-soft);
+}
+
+.chart-median line {
+  stroke: var(--ink-faint);
+  stroke-dasharray: 4 3;
+}
+
+.chart-median text {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  fill: var(--ink-faint);
+}
+
+.chart-point.is-active > :last-child {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+/* Transparent buttons over the plot give each point real keyboard and
+   activation semantics; the SVG only draws the glyphs. */
+.chart-point-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.chart-point-button {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+
+.chart-point-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+}
+
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 12px));
+  min-width: 180px;
+  background: var(--ink);
+  color: var(--paper-raised);
+  padding: 9px 11px 10px;
+  border: 1px solid var(--ink);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.chart-tooltip-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.chart-tooltip-sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--rule);
+  margin-bottom: 6px;
+}
+
+.chart-tooltip dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.chart-tooltip dt {
+  color: var(--rule);
+}
+
+.chart-tooltip dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tooltip-row {
+  display: contents;
+}
+
+.chart-warning {
+  margin-top: 12px;
+}
+
+.chart-empty {
+  margin: 0;
+}
+
+/* Sortable headers: anchors so sorting works before hydration. */
+
+.sort-anchor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+}
+
+.sort-anchor:hover {
+  color: var(--accent-deep);
+  text-decoration: underline;
+}
+
+.sort-mark {
+  font-size: 9px;
+  color: var(--ink-faint);
+}
+
+.data-table th[aria-sort] .sort-anchor {
+  color: var(--ink);
+}
+
+.data-table th[aria-sort] .sort-mark {
+  color: var(--accent);
+}
+
 /* ------------------------------------------------------------------ detail */
 
 .crumbs {
@@ -950,6 +1244,25 @@ main {
   .filter-bar .button {
     margin-left: 0;
   }
+
+  .selector-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .selector-tools {
+    justify-content: flex-start;
+  }
+
+  .chart-tooltip {
+    transform: translate(-50%, calc(-100% - 8px));
+    min-width: 160px;
+  }
+}
+
+/* Author display rules on mobile rows must not override the `hidden` attribute:
+   the category matrix filters rows with it. */
+.data-table tbody tr[hidden] {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -965,7 +1278,9 @@ main {
 
   .topnav,
   .filter-bar,
-  .pagination {
+  .pagination,
+  .selector-bar,
+  .chart-controls {
     display: none;
   }
 }

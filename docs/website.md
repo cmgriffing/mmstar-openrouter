@@ -17,9 +17,11 @@ apps/web/src/pages/api/*.json.ts      read-only endpoints
 apps/web/src/layouts/Base.astro       site shell, fonts, navigation
 apps/web/src/styles/global.css        field-report design system
 apps/web/src/lib/format.ts            pure value formatting (unknown vs zero)
-apps/web/src/lib/view.ts              outcome labels, filters, query strings
+apps/web/src/lib/view.ts              outcome labels, filters, selection/axes/sorting, metrics
 apps/web/src/components/FixtureExplorer.tsx  drilldown island (filters, pages, states)
-apps/web/src/pages/index.astro        server-rendered comparisons
+apps/web/src/components/ComparisonExplorer.tsx  comparison island (model selector, chart, sortable table)
+apps/web/src/components/QuadrantChart.tsx  hand-rolled SVG quadrant chart (points, medians, tooltip)
+apps/web/src/pages/index.astro        comparison island host + publication stat strip
 apps/web/src/pages/fixtures.astro     drilldown shell + island
 apps/web/src/pages/fixture.astro      fixture detail (image, lineage, attempts)
 apps/web/public/                      generated static assets (Git-ignored)
@@ -66,7 +68,7 @@ JavaScript and never opens a writable database.
 
 | Route | Behavior |
 | --- | --- |
-| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a category accuracy matrix, and the full run lineage table. A family switcher is deliberately absent. |
+| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a hand-rolled quadrant chart, a category accuracy matrix, and the full run lineage table. A model-grouped multi-select (URL `models`) filters the table, chart, and matrix together; `sort`/`dir` anchors order the table and `x`/`y`/`scale` choose the chart axes and cost scale. The stat strip and run lineage stay publication-wide. A family switcher is deliberately absent. |
 | `/fixtures?evaluationId&category&state&kind&offset` | Paginated fixture drilldown (25 per page) over publication-wide effective outcomes, with recovered/indeterminate badges; filtering re-queries `/api/fixtures.json` and keeps the URL shareable. |
 | `/fixture?evaluationId&fixtureId&back` | One fixture: original image, question, effective outcome, parsed/expected answer, response text, usage/cost, failure details, outcome lineage (effective vs superseded), and the attempt ledger. |
 
@@ -76,6 +78,31 @@ Presentation rules:
   attempts are unknown); a real zero stays `$0.00`/`0`.
 - Scored accuracy (correct/settled), selected accuracy (correct/selected),
   coverage (settled/selected), and attempt counts are labelled separately.
+- The comparison selector is URL-backed and mirrored by the server-rendered
+  island: `models` holds the selected evaluation IDs (absent means every
+  evaluation, empty means none), `x`/`y` hold the chart metrics (default
+  `cost`/`pass`; assigning the other axis metric swaps the pair), `scale`
+  holds `log`/`linear` for a cost axis (default `log`), and `sort`/`dir` hold
+  the table order (default scored accuracy descending). Unknown evaluation IDs
+  and unknown parameter values are dropped and reported with the same
+  ignored-filter notice as the drilldown; the canonical URL omits defaults and
+  the all-selected case.
+- Table headers are anchors carrying `sort`/`dir`, so sorting works without
+  JavaScript; hydration re-sorts in place and keeps the URL shareable. Null
+  cost, token, and latency values always sort last in either direction, and
+  ties break on model alias, then reasoning mode, then evaluation ID.
+- Chart metric definitions: cost = `knownUsd`, speed =
+  `meanRequestLatencyMs` (mean last-attempt request latency; unresolved
+  timeouts count as latencies), token usage = `totalTokens`, pass rate =
+  `scoredAccuracy`. Evaluations whose known cost is `$0` or never reported are
+  excluded from a cost axis and named below the chart with that distinction;
+  an unknown on either axis is never plotted as zero. Crosshairs mark the
+  median of the visible points and are omitted below two points. Points carry
+  deterministic per-model colors and full accessible names; the comparison
+  table is the tabular fallback.
+- Attempts counts effective outcomes; cost and token totals come from the
+  winning family's full attempt ledger, which includes superseded retries and
+  recovery attempts.
 - Recovery never double-counts: lists and comparisons show one effective
   outcome per evaluation/fixture from the winning family; the detail page keeps
   the superseded original visible and marks the effective record. A newer family
@@ -110,6 +137,12 @@ bun apps/web/scripts/seed-verification-publication.ts /tmp/mmstar-verification
 MMSTAR_PUBLICATION_DIR=/tmp/mmstar-verification pnpm --filter @mmstar/web build:node
 HOST=127.0.0.1 PORT=4602 node apps/web/dist/server/entry.mjs
 ```
+
+With that server running, the comparison island states can be reached directly:
+`/` (default cost × pass chart, three evaluations), `/?models=demo::low`
+(single selection, no median crosshairs), `/?models=` (empty states for chart,
+table, and matrix), `/?sort=cost&dir=asc`, `/?x=pass&y=cost&scale=linear`, and
+`/?models=ghost&x=nope` (ignored-filter notice).
 
 ## Platform loading
 
@@ -187,7 +220,25 @@ detail, keyboard/overflow behavior) exercise code paths that survive the one-tab
 change, but the switch itself has not been re-run in a browser. The v2 one-table view
 has been checked with server-rendered smoke against the seed publication (all
 evaluations in one table, winning-family provenance, mixed-settings notice, no
-`?rootRunId=` effect); re-run the browser pass before claiming it verified.
+`?rootRunId=` effect).
+
+The comparison island (model selector, quadrant chart, sortable table) was checked in
+a real browser on 2026-09-25 against both the seed publication and an export of the
+two-run results in `apps/runner/results`: group and effort toggles kept table, chart,
+and category matrix in sync and updated the URL; sort anchors re-sorted in place with
+`aria-sort` and also worked by plain navigation with JavaScript disabled; selecting
+the metric already on the other axis swapped the pair; the cost log/linear toggle and
+selection/sort/axis URLs survived a reload; the warning-only chart state appeared for
+the all-`$0` real publication (`reported as $0` plus the empty state); the empty
+selection showed explicit empty states on all three surfaces; and point focus revealed
+the full tooltip. Null ordering and the `cost never reported` distinction are covered
+by `view.test.ts` because neither available publication has a null winning-family
+metric or an unpriced winning family to show in the browser. The matrix filtering was
+re-checked at a 400 px viewport on the same date after the mobile card rules were found
+to override the `hidden` attribute; `/?models=demo::low` now hides the other matrix
+rows there, and `styles/global.test.ts` guards the override rule. The remaining
+drilldown/keyboard checks from the 2026-09-24 pass still apply to unchanged code but
+have not been repeated.
 
 - comparisons render every family present in the publication, including the incomplete
   and mixed-settings notices, with effective-outcome counts (a recovered failure counts

@@ -5,26 +5,20 @@ import type {
   PublicationMeta,
   RunSummary,
 } from "@mmstar/results";
+import ComparisonExplorer from "../components/ComparisonExplorer";
 import Base from "../layouts/Base.astro";
-import {
-  formatCount,
-  formatDateTime,
-  formatFraction,
-  formatLatency,
-  formatPercent,
-  formatTokens,
-  formatTokensExact,
-  shortHash,
-} from "../lib/format";
+import { formatCount, formatDateTime, formatPercent, shortHash } from "../lib/format";
 import {
   categoryCell,
   categoryMatrix,
-  comparisonCost,
+  comparisonCountLabel,
+  comparisonIgnoredNotices,
   evaluationLabel,
-  isIncomplete,
+  matrixEmptySelection,
+  matrixRowHidden,
   publicationSettingIssues,
+  readComparisonFilters,
   runKindLabel,
-  sortComparisons,
 } from "../lib/view";
 import { getPublicationRepository, PublicationUnavailableError } from "../server/publication";
 
@@ -59,7 +53,23 @@ try {
 }
 
 const runs = model?.runs ?? [];
-const comparisons = sortComparisons(model?.comparisons ?? []);
+const comparisons = model?.comparisons ?? [];
+
+// URL state is validated against the publication before it reaches the island
+// or the matrix, mirroring the fixture drilldown: unknown evaluation IDs and
+// unknown parameter values are dropped and reported instead of rendered.
+const comparisonFilters = readComparisonFilters(Astro.url.searchParams, {
+  evaluationIds: new Set(comparisons.map((row) => row.evaluationId)),
+});
+const selectedIds =
+  comparisonFilters.values.models === null ? null : new Set(comparisonFilters.values.models);
+const selectedComparisons =
+  selectedIds === null
+    ? comparisons
+    : comparisons.filter((row) => selectedIds.has(row.evaluationId));
+const ignoredNotices = comparisonIgnoredNotices(comparisonFilters);
+const emptySelection = matrixEmptySelection(selectedIds);
+
 // The mixed-settings notice concerns the families that actually win rows: a
 // family shadowed by a newer duplicate cannot make the shown results less
 // like-for-like.
@@ -75,39 +85,6 @@ const publicationCoverage = totalSelected > 0 ? totalSettled / totalSelected : n
 const setNames = [...new Set(runs.map((run) => run.setName))];
 const setName = setNames.length === 1 ? setNames[0] : setNames.length === 0 ? "—" : "mixed";
 const fixturesPerEvaluation = comparisons[0]?.selected ?? runs[0]?.fixtureCount ?? null;
-
-interface OutcomeChip {
-  label: string;
-  symbol: string;
-  tone: "good" | "bad" | "warn" | "neutral";
-  count: number;
-}
-
-function outcomeChips(row: EvaluationComparison): OutcomeChip[] {
-  return (
-    [
-      { label: "Correct", symbol: "✓", tone: "good" as const, count: row.correct },
-      { label: "Incorrect", symbol: "×", tone: "bad" as const, count: row.incorrect },
-      { label: "Ambiguous", symbol: "≈", tone: "warn" as const, count: row.ambiguous },
-      { label: "Invalid", symbol: "!", tone: "warn" as const, count: row.invalid },
-      { label: "Refused", symbol: "⊘", tone: "warn" as const, count: row.refused },
-      { label: "Truncated", symbol: "…", tone: "warn" as const, count: row.truncated },
-      { label: "Pending", symbol: "·", tone: "neutral" as const, count: row.pending },
-      { label: "Failed", symbol: "✗", tone: "bad" as const, count: row.failed },
-      { label: "Indeterminate", symbol: "?", tone: "warn" as const, count: row.indeterminate },
-      { label: "Cancelled", symbol: "—", tone: "neutral" as const, count: row.cancelled },
-    ] satisfies OutcomeChip[]
-  ).filter((chip) => chip.count > 0);
-}
-
-function unresolvedSummary(row: EvaluationComparison): string {
-  const parts: string[] = [];
-  if (row.pending > 0) parts.push(`${formatCount(row.pending)} pending`);
-  if (row.failed > 0) parts.push(`${formatCount(row.failed)} failed`);
-  if (row.indeterminate > 0) parts.push(`${formatCount(row.indeterminate)} indeterminate`);
-  if (row.cancelled > 0) parts.push(`${formatCount(row.cancelled)} cancelled`);
-  return parts.join(" · ");
-}
 ---
 
 <Base
@@ -161,6 +138,17 @@ function unresolvedSummary(row: EvaluationComparison): string {
           </dl>
         </section>
 
+        {ignoredNotices.length > 0 && (
+          <section class="notice" role="alert">
+            <h3>Ignored unknown filters</h3>
+            <ul>
+              {ignoredNotices.map((notice) => (
+                <li>{notice}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {issues.length > 0 && (
           <section class="notice" role="alert">
             <h3>Mixed experiment settings</h3>
@@ -201,7 +189,9 @@ function unresolvedSummary(row: EvaluationComparison): string {
               <p class="kicker">02 · Comparisons</p>
               <h2>Model × effort</h2>
             </div>
-            <p class="kicker">{formatCount(comparisons.length)} evaluations</p>
+            <p class="kicker" data-comparison-count>
+              {comparisonCountLabel(selectedComparisons.length, comparisons.length)}
+            </p>
           </div>
           {comparisons.length === 0 ? (
             <div class="empty-panel">
@@ -209,131 +199,16 @@ function unresolvedSummary(row: EvaluationComparison): string {
               <p>The publication contains runs but no evaluation records to compare.</p>
             </div>
           ) : (
-            <div class="table-wrap" tabindex="0" role="region" aria-label="Model comparisons">
-              <table class="data-table comparison-table">
-                <caption>
-                  One winning family per evaluation: the newest family with terminal outcomes
-                  supplies every fixture; recovered results resolve once.
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Model</th>
-                    <th scope="col">Effort</th>
-                    <th scope="col">Router / group</th>
-                    <th scope="col">Scored accuracy</th>
-                    <th scope="col">Coverage</th>
-                    <th scope="col">Outcomes</th>
-                    <th scope="col">Latency</th>
-                    <th scope="col">Tokens</th>
-                    <th scope="col">Cost</th>
-                    <th scope="col" class="num">
-                      Attempts
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {comparisons.map((row) => {
-                    const cost = comparisonCost(row);
-                    const chips = outcomeChips(row);
-                    const incomplete = isIncomplete(row);
-                    return (
-                      <tr class={incomplete ? "is-incomplete" : undefined}>
-                        <td data-label="Model">
-                          <span class="model-name">{row.modelAlias}</span>
-                          <span class="badge-row">
-                            {incomplete && (
-                              <span class="badge badge--warn" title={unresolvedSummary(row)}>
-                                ! incomplete
-                              </span>
-                            )}
-                          </span>
-                          <a
-                            class="figure-sub"
-                            href={`/fixtures?${new URLSearchParams({
-                              evaluationId: row.evaluationId,
-                            }).toString()}`}
-                          >
-                            inspect fixtures →
-                          </a>
-                          <span class="figure-sub" title={row.rootRunId}>
-                            family {shortHash(row.rootRunId, 14)}
-                          </span>
-                        </td>
-                        <td data-label="Effort">
-                          <span class="mono">{row.reasoningMode}</span>
-                        </td>
-                        <td data-label="Router / group">
-                          <span class="mono">{row.openRouterId}</span>
-                          <span class="figure-sub">group {row.rateLimitGroup}</span>
-                        </td>
-                        <td data-label="Scored accuracy">
-                          <span class="figure">{formatPercent(row.scoredAccuracy)}</span>
-                          <span class="figure-sub">
-                            {formatFraction(row.correct, row.settled)} settled
-                          </span>
-                          <span class="figure-sub">
-                            {formatFraction(row.correct, row.selected)} selected
-                          </span>
-                        </td>
-                        <td data-label="Coverage">
-                          <span class="figure">{formatPercent(row.coverage)}</span>
-                          <span class="figure-sub">
-                            {formatFraction(row.settled, row.selected)} settled
-                          </span>
-                        </td>
-                        <td data-label="Outcomes">
-                          <span class="badge-row">
-                            {chips.map((chip) => (
-                              <span class={`badge badge--${chip.tone}`}>
-                                {chip.symbol} {formatCount(chip.count)}
-                              </span>
-                            ))}
-                          </span>
-                        </td>
-                        <td data-label="Latency">
-                          <span class="mono">{formatLatency(row.meanRequestLatencyMs)}</span>
-                          <span class="figure-sub">
-                            request · {formatLatency(row.meanTotalFixtureTimeMs)} fixture
-                          </span>
-                        </td>
-                        <td data-label="Tokens">
-                          {row.totalTokens === null ? (
-                            <>
-                              <span class="mono">not reported</span>
-                              <span class="figure-sub">
-                                {formatCount(row.usageUnknownCount)} without usage
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <span class="mono" title={`${formatTokensExact(row.totalTokens)} total`}>
-                                {formatTokens(row.totalTokens)}
-                              </span>
-                              <span class="figure-sub">
-                                {formatTokens(row.promptTokens)} in · {formatTokens(row.completionTokens)}{" "}
-                                out
-                              </span>
-                            </>
-                          )}
-                        </td>
-                        <td data-label="Cost">
-                          <span class="mono">{cost.text}</span>
-                          {cost.detail !== null && <span class="figure-sub">{cost.detail}</span>}
-                        </td>
-                        <td data-label="Attempts" class="num">
-                          <span class="mono">{formatCount(row.attempts)}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ComparisonExplorer
+              client:load
+              comparisons={comparisons}
+              initialSelection={comparisonFilters.values.models}
+              initialSort={comparisonFilters.values.sort}
+              initialDir={comparisonFilters.values.dir}
+              initialAxes={{ x: comparisonFilters.values.x, y: comparisonFilters.values.y }}
+              initialCostScale={comparisonFilters.values.scale}
+            />
           )}
-          <p class="footnote">
-            Scored accuracy = correct / settled; selected accuracy = correct / selected; coverage =
-            settled / selected. Unknown cost counts attempts without a reported or estimated price.
-          </p>
         </section>
 
         <section class="section">
@@ -350,41 +225,55 @@ function unresolvedSummary(row: EvaluationComparison): string {
               <p>Category metrics appear once a run has effective outcomes.</p>
             </div>
           ) : (
-            <div class="table-wrap" tabindex="0" role="region" aria-label="Category accuracy">
-              <table class="data-table matrix-table">
-                <caption>Correct / settled within each category; "—" means nothing settled.</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Evaluation</th>
-                    {matrix.names.map((name) => (
-                      <th scope="col">
-                        {name}
-                      </th>
-                    ))}
-                    <th scope="col" class="num">
-                      Overall
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {comparisons.map((row) => (
+            <>
+              <div class="empty-panel" data-matrix-empty hidden={!emptySelection}>
+                <h2>No models selected</h2>
+                <p>Select at least one model above to see its category accuracy.</p>
+              </div>
+              <div
+                class="table-wrap"
+                data-matrix-table
+                tabindex="0"
+                role="region"
+                aria-label="Category accuracy"
+                hidden={emptySelection}
+              >
+                <table class="data-table matrix-table">
+                  <caption>Correct / settled within each category; "—" means nothing settled.</caption>
+                  <thead>
                     <tr>
-                      <th scope="row">{evaluationLabel(row)}</th>
+                      <th scope="col">Evaluation</th>
                       {matrix.names.map((name) => (
-                        <td>
-                          <span class="cell-figure">
-                            {categoryCell(matrix.byEvaluation.get(row.evaluationId)?.get(name))}
-                          </span>
-                        </td>
+                        <th scope="col">{name}</th>
                       ))}
-                      <td class="num matrix-overall">
-                        <span class="cell-figure">{formatPercent(row.scoredAccuracy)}</span>
-                      </td>
+                      <th scope="col" class="num">
+                        Overall
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {comparisons.map((row) => (
+                      <tr
+                        data-matrix-evaluation={row.evaluationId}
+                        hidden={matrixRowHidden(selectedIds, row.evaluationId)}
+                      >
+                        <th scope="row">{evaluationLabel(row)}</th>
+                        {matrix.names.map((name) => (
+                          <td>
+                            <span class="cell-figure">
+                              {categoryCell(matrix.byEvaluation.get(row.evaluationId)?.get(name))}
+                            </span>
+                          </td>
+                        ))}
+                        <td class="num matrix-overall">
+                          <span class="cell-figure">{formatPercent(row.scoredAccuracy)}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
 
