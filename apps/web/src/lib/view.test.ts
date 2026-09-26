@@ -2,18 +2,35 @@ import type { EvaluationComparison, RunSummary } from "@mmstar/results";
 import { OUTCOME_KINDS, OUTCOME_STATES } from "@mmstar/results";
 import { describe, expect, it } from "vitest";
 import {
+  buildChartAxisScale,
   categoryCell,
   categoryMatrix,
+  chartEmptyMessage,
+  chartExclusionText,
+  comparisonChartSeries,
   comparisonCost,
+  comparisonCountLabel,
+  comparisonHref,
+  comparisonIgnoredNotices,
+  comparisonQueryString,
+  costExclusion,
   fixtureQueryString,
   isIncomplete,
+  matrixEmptySelection,
+  matrixRowHidden,
+  median,
+  nextComparisonAxes,
+  nextComparisonSort,
   OUTCOME_KIND_OPTIONS,
   OUTCOME_STATE_OPTIONS,
   outcomePresentation,
   parseBackTarget,
   publicationSettingIssues,
+  readComparisonFilters,
   readFixtureFilters,
-  sortComparisons,
+  sortComparisonRows,
+  toggleComparisonGroup,
+  toggleComparisonSelection,
   unresolvedCount,
 } from "./view";
 
@@ -118,17 +135,15 @@ describe("comparison presentation", () => {
     expect(unresolvedCount(comparison({ failed: 2, indeterminate: 1 }))).toBe(3);
   });
 
-  it("sorts by selected accuracy then alias", () => {
+  it("sorts by scored accuracy, then alias and effort", () => {
     const rows = [
-      comparison({ modelAlias: "beta", selectedAccuracy: 0.5, scoredAccuracy: 0.5 }),
-      comparison({ modelAlias: "alpha", selectedAccuracy: 0.7, scoredAccuracy: 0.6 }),
-      comparison({ modelAlias: "alpha", reasoningMode: "low", selectedAccuracy: 0.7 }),
+      comparison({ modelAlias: "beta", scoredAccuracy: 0.5, selectedAccuracy: 0.9 }),
+      comparison({ modelAlias: "alpha", reasoningMode: "low", scoredAccuracy: 0.7 }),
+      comparison({ modelAlias: "alpha", scoredAccuracy: 0.7 }),
     ];
-    expect(sortComparisons(rows).map((row) => `${row.modelAlias}:${row.reasoningMode}`)).toEqual([
-      "alpha:high",
-      "alpha:low",
-      "beta:high",
-    ]);
+    expect(sortComparisonRows(rows).map((row) => `${row.modelAlias}:${row.reasoningMode}`)).toEqual(
+      ["alpha:high", "alpha:low", "beta:high"],
+    );
   });
 
   it("keeps unknown cost distinct from a zero cost", () => {
@@ -202,6 +217,449 @@ describe("filter sanitization", () => {
     );
     expect(fixtureQueryString({ offset: 0 })).toBe("");
     expect(fixtureQueryString({ state: "failed", offset: 50 })).toBe("state=failed&offset=50");
+  });
+});
+
+describe("comparison filter sanitization", () => {
+  const context = { evaluationIds: new Set(["alpha::high", "alpha::low", "beta::high"]) };
+
+  it("defaults to every evaluation, cost x pass, log scale, and accuracy desc", () => {
+    const result = readComparisonFilters(new URLSearchParams(), context);
+    expect(result.values).toEqual({
+      models: null,
+      x: "cost",
+      y: "pass",
+      scale: "log",
+      sort: "accuracy",
+      dir: "desc",
+    });
+    expect(result.invalid).toEqual([]);
+    expect(result.ignoredModels).toEqual([]);
+  });
+
+  it("keeps known models and reports unknown ones once", () => {
+    const result = readComparisonFilters(
+      new URLSearchParams({ models: "alpha::high,ghost,beta::high,ghost" }),
+      context,
+    );
+    expect(result.values.models).toEqual(["alpha::high", "beta::high"]);
+    expect(result.ignoredModels).toEqual(["ghost"]);
+    expect(result.invalid).toEqual([]);
+    expect(result.modelsFellBack).toBe(false);
+  });
+
+  it("distinguishes an absent parameter (all) from an empty selection (none)", () => {
+    expect(readComparisonFilters(new URLSearchParams(), context).values.models).toBeNull();
+    expect(
+      readComparisonFilters(new URLSearchParams({ models: "" }), context).values.models,
+    ).toEqual([]);
+  });
+
+  it("falls back to all when every named model is unknown, like the drilldown", () => {
+    const result = readComparisonFilters(new URLSearchParams({ models: "ghost" }), context);
+    expect(result.values.models).toBeNull();
+    expect(result.ignoredModels).toEqual(["ghost"]);
+    expect(result.modelsFellBack).toBe(true);
+  });
+
+  it("drops unknown enum values and repairs a colliding axis pair", () => {
+    const result = readComparisonFilters(
+      new URLSearchParams({
+        x: "nope",
+        y: "cost",
+        scale: "sqrt",
+        sort: "outcomes",
+        dir: "sideways",
+      }),
+      context,
+    );
+    expect(result.values.x).toBe("cost");
+    expect(result.values.y).toBe("pass");
+    expect(result.values.scale).toBe("log");
+    expect(result.values.sort).toBe("accuracy");
+    expect(result.values.dir).toBe("desc");
+    expect(result.invalid).toEqual(["x", "y", "scale", "sort", "dir"]);
+  });
+
+  it("accepts explicit axis, scale, and sort values", () => {
+    const result = readComparisonFilters(
+      new URLSearchParams({ x: "tokens", y: "speed", scale: "linear", sort: "cost", dir: "asc" }),
+      context,
+    );
+    expect(result.values).toEqual({
+      models: null,
+      x: "tokens",
+      y: "speed",
+      scale: "linear",
+      sort: "cost",
+      dir: "asc",
+    });
+    expect(result.invalid).toEqual([]);
+  });
+});
+
+describe("comparison canonicalization", () => {
+  it("omits defaults and the all-selected case", () => {
+    expect(comparisonQueryString({})).toBe("");
+    expect(comparisonQueryString({ models: null })).toBe("");
+    expect(
+      comparisonQueryString({
+        x: "cost",
+        y: "pass",
+        scale: "log",
+        sort: "accuracy",
+        dir: "desc",
+      }),
+    ).toBe("");
+    expect(comparisonHref({})).toBe("/");
+  });
+
+  it("sorts and deduplicates the selected model IDs", () => {
+    expect(comparisonQueryString({ models: ["beta::high", "alpha::high", "beta::high"] })).toBe(
+      "models=alpha%3A%3Ahigh%2Cbeta%3A%3Ahigh",
+    );
+    expect(comparisonQueryString({ models: [] })).toBe("models=");
+  });
+
+  it("keeps non-default state and round-trips it through parsing", () => {
+    const state = {
+      models: ["alpha::high"],
+      x: "tokens" as const,
+      y: "cost" as const,
+      scale: "linear" as const,
+      sort: "cost" as const,
+      dir: "asc" as const,
+    };
+    const query = comparisonQueryString(state);
+    expect(query).not.toBe("");
+    expect(comparisonHref(state)).toBe(`/?${query}`);
+    const parsed = readComparisonFilters(new URLSearchParams(query), {
+      evaluationIds: new Set(["alpha::high"]),
+    });
+    expect(parsed.values).toEqual(state);
+    expect(parsed.invalid).toEqual([]);
+  });
+});
+
+describe("comparison sorting", () => {
+  function sortableRows(): EvaluationComparison[] {
+    return [
+      comparison({
+        evaluationId: "beta::high",
+        modelAlias: "beta",
+        knownUsd: 0.5,
+        totalTokens: 300,
+        meanRequestLatencyMs: 500,
+        scoredAccuracy: 0.5,
+      }),
+      comparison({
+        evaluationId: "alpha::low",
+        modelAlias: "alpha",
+        reasoningMode: "low",
+        knownUsd: null,
+        totalTokens: null,
+        meanRequestLatencyMs: null,
+        scoredAccuracy: 0.9,
+      }),
+      comparison({
+        evaluationId: "alpha::high",
+        modelAlias: "alpha",
+        knownUsd: 0.1,
+        totalTokens: 100,
+        meanRequestLatencyMs: 2000,
+        scoredAccuracy: 0.9,
+      }),
+    ];
+  }
+
+  const ids = (rows: EvaluationComparison[]) => rows.map((row) => row.evaluationId);
+
+  it("defaults to scored accuracy descending with alias and effort tie-breaks", () => {
+    expect(ids(sortComparisonRows(sortableRows()))).toEqual([
+      "alpha::high",
+      "alpha::low",
+      "beta::high",
+    ]);
+  });
+
+  it("sorts text columns in both directions", () => {
+    expect(ids(sortComparisonRows(sortableRows(), "model", "asc"))).toEqual([
+      "alpha::high",
+      "alpha::low",
+      "beta::high",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "model", "desc"))).toEqual([
+      "beta::high",
+      "alpha::high",
+      "alpha::low",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "effort", "asc"))).toEqual([
+      "alpha::high",
+      "beta::high",
+      "alpha::low",
+    ]);
+  });
+
+  it("keeps nulls last for cost, tokens, and latency in both directions", () => {
+    expect(ids(sortComparisonRows(sortableRows(), "cost", "asc"))).toEqual([
+      "alpha::high",
+      "beta::high",
+      "alpha::low",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "cost", "desc"))).toEqual([
+      "beta::high",
+      "alpha::high",
+      "alpha::low",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "tokens", "asc"))).toEqual([
+      "alpha::high",
+      "beta::high",
+      "alpha::low",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "tokens", "desc"))).toEqual([
+      "beta::high",
+      "alpha::high",
+      "alpha::low",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "latency", "asc"))).toEqual([
+      "beta::high",
+      "alpha::high",
+      "alpha::low",
+    ]);
+    expect(ids(sortComparisonRows(sortableRows(), "latency", "desc"))).toEqual([
+      "alpha::high",
+      "beta::high",
+      "alpha::low",
+    ]);
+  });
+
+  it("breaks remaining ties deterministically by alias, effort, then evaluation ID", () => {
+    const rows = [
+      comparison({ evaluationId: "zeta::high", modelAlias: "same", scoredAccuracy: 0.4 }),
+      comparison({ evaluationId: "alpha::high", modelAlias: "same", scoredAccuracy: 0.4 }),
+      comparison({
+        evaluationId: "alpha::low",
+        modelAlias: "same",
+        reasoningMode: "low",
+        scoredAccuracy: 0.4,
+      }),
+    ];
+    expect(ids(sortComparisonRows(rows, "accuracy", "desc"))).toEqual([
+      "alpha::high",
+      "zeta::high",
+      "alpha::low",
+    ]);
+  });
+
+  it("uses natural first-activation directions and toggles the active column", () => {
+    const current = { sort: "cost" as const, dir: "desc" as const };
+    expect(nextComparisonSort("model", current)).toEqual({ sort: "model", dir: "asc" });
+    expect(nextComparisonSort("attempts", current)).toEqual({ sort: "attempts", dir: "desc" });
+    expect(nextComparisonSort("cost", current)).toEqual({ sort: "cost", dir: "asc" });
+  });
+});
+
+describe("cost exclusions and chart series", () => {
+  it("classifies reported zero, never reported, and priced costs", () => {
+    expect(costExclusion(comparison({ knownUsd: 0 }))).toBe("cost-zero");
+    expect(costExclusion(comparison({ knownUsd: null }))).toBe("cost-unknown");
+    expect(costExclusion(comparison({ knownUsd: 0.004 }))).toBeNull();
+  });
+
+  it("excludes zero and unknown costs with distinct reasons", () => {
+    const rows = [
+      comparison({ evaluationId: "free", modelAlias: "free", knownUsd: 0 }),
+      comparison({ evaluationId: "unpriced", modelAlias: "unpriced", knownUsd: null }),
+      comparison({
+        evaluationId: "paid",
+        modelAlias: "paid",
+        knownUsd: 0.25,
+        scoredAccuracy: 0.5,
+      }),
+    ];
+    const series = comparisonChartSeries(rows, "cost", "pass");
+    expect(series.points.map((point) => point.evaluationId)).toEqual(["paid"]);
+    expect(series.excluded).toEqual([
+      { evaluationId: "free", label: "free · high", reason: { kind: "cost-zero" } },
+      { evaluationId: "unpriced", label: "unpriced · high", reason: { kind: "cost-unknown" } },
+    ]);
+    expect(chartExclusionText({ kind: "cost-zero" })).toBe("reported as $0");
+    expect(chartExclusionText({ kind: "cost-unknown" })).toBe("cost never reported");
+  });
+
+  it("treats a missing non-cost axis value as unplottable, never as zero", () => {
+    const rows = [comparison({ evaluationId: "alpha::high", totalTokens: null, knownUsd: 1 })];
+    const series = comparisonChartSeries(rows, "tokens", "pass");
+    expect(series.points).toEqual([]);
+    expect(series.excluded[0]?.reason).toEqual({ kind: "metric-unknown", metric: "tokens" });
+    expect(chartExclusionText({ kind: "metric-unknown", metric: "tokens" })).toBe(
+      "Token usage not reported",
+    );
+  });
+
+  it("plots a point with all four metric values when every axis value is known", () => {
+    const series = comparisonChartSeries([comparison({ knownUsd: 0.25 })], "cost", "pass");
+    expect(series.excluded).toEqual([]);
+    expect(series.points[0]?.metrics).toEqual({
+      cost: 0.25,
+      speed: 1200,
+      tokens: 150,
+      pass: 0.6,
+    });
+  });
+});
+
+describe("chart helpers", () => {
+  it("takes the median of odd and even counts", () => {
+    expect(median([3, 1, 2])).toBe(2);
+    expect(median([4, 1, 3, 2])).toBe(2.5);
+    expect(median([5])).toBe(5);
+    expect(median([])).toBeNull();
+  });
+
+  it("builds a log cost scale with ticks inside the visible range", () => {
+    const scale = buildChartAxisScale([0.0004, 0.12], true);
+    expect(scale?.log).toBe(true);
+    expect(scale?.position(0.0004)).toBeCloseTo(0);
+    expect(scale?.position(0.12)).toBeCloseTo(1);
+    expect(scale?.ticks.length).toBeGreaterThan(1);
+    expect(scale?.ticks.every((tick) => tick.value >= 0.0004 && tick.value <= 0.12)).toBe(true);
+  });
+
+  it("refuses a log scale over non-positive values and pads a single value", () => {
+    expect(buildChartAxisScale([0], true)).toBeNull();
+    const linear = buildChartAxisScale([7], false);
+    expect(linear?.position(7)).toBeCloseTo(0.5);
+    expect(linear?.ticks.length).toBeGreaterThan(1);
+  });
+
+  it("keeps linear ticks unique and monotonic for a large base with a small step", () => {
+    const scale = buildChartAxisScale([1e12, 1e12 + 0.5], false);
+    const values = scale?.ticks.map((tick) => tick.value) ?? [];
+    expect(values.length).toBeGreaterThan(1);
+    expect(new Set(values).size).toBe(values.length);
+    expect(
+      values.every((value, index) => {
+        const previous = values[index - 1];
+        return previous === undefined || value > previous;
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("comparison selection transitions", () => {
+  const all = ["alpha::high", "alpha::low", "beta::high"];
+
+  it("toggles one evaluation and collapses a full selection to null", () => {
+    expect(toggleComparisonSelection(null, all, "alpha::low")).toEqual([
+      "alpha::high",
+      "beta::high",
+    ]);
+    expect(toggleComparisonSelection(["alpha::high", "beta::high"], all, "alpha::low")).toBeNull();
+    expect(toggleComparisonSelection(["alpha::high"], all, "alpha::low")).toEqual([
+      "alpha::high",
+      "alpha::low",
+    ]);
+  });
+
+  it("toggles whole groups from the full, partial, and empty states", () => {
+    expect(toggleComparisonGroup(null, all, ["alpha::high", "alpha::low"])).toEqual(["beta::high"]);
+    expect(toggleComparisonGroup(["beta::high"], all, ["alpha::high", "alpha::low"])).toBeNull();
+    expect(toggleComparisonGroup(["alpha::high"], all, ["alpha::low"])).toEqual([
+      "alpha::high",
+      "alpha::low",
+    ]);
+    expect(toggleComparisonGroup([], all, ["alpha::low", "beta::high"])).toEqual([
+      "alpha::low",
+      "beta::high",
+    ]);
+  });
+});
+
+describe("comparison axes and matrix visibility", () => {
+  it("swaps the pair when the metric already on the other axis is chosen", () => {
+    const axes = { x: "cost" as const, y: "pass" as const };
+    expect(nextComparisonAxes(axes, "x", "pass")).toEqual({ x: "pass", y: "cost" });
+    expect(nextComparisonAxes(axes, "y", "cost")).toEqual({ x: "pass", y: "cost" });
+  });
+
+  it("changes one axis without colliding, and keeps the same pair for a no-op", () => {
+    const axes = { x: "cost" as const, y: "pass" as const };
+    expect(nextComparisonAxes(axes, "x", "tokens")).toEqual({ x: "tokens", y: "pass" });
+    expect(nextComparisonAxes(axes, "y", "speed")).toEqual({ x: "cost", y: "speed" });
+    expect(nextComparisonAxes(axes, "x", "cost")).toEqual(axes);
+  });
+
+  it("hides matrix rows only for an explicit selection", () => {
+    expect(matrixRowHidden(null, "alpha::high")).toBe(false);
+    expect(matrixRowHidden(new Set(["alpha::high"]), "alpha::high")).toBe(false);
+    expect(matrixRowHidden(new Set(["alpha::high"]), "alpha::low")).toBe(true);
+    expect(matrixEmptySelection(null)).toBe(false);
+    expect(matrixEmptySelection(new Set())).toBe(true);
+    expect(matrixEmptySelection(new Set(["alpha::high"]))).toBe(false);
+  });
+});
+
+describe("comparison labels and ignored-filter notices", () => {
+  it("formats the comparison count for the kicker and the island", () => {
+    expect(comparisonCountLabel(3, 3)).toBe("3 of 3 evaluations");
+    expect(comparisonCountLabel(0, 1)).toBe("0 of 1 evaluations");
+  });
+
+  it("distinguishes a partial model match from a full fallback", () => {
+    expect(
+      comparisonIgnoredNotices({ invalid: [], ignoredModels: ["ghost"], modelsFellBack: false }),
+    ).toEqual([
+      "model ghost did not match this publication, so the selection kept only the known evaluations.",
+    ]);
+    expect(
+      comparisonIgnoredNotices({ invalid: [], ignoredModels: ["ghost"], modelsFellBack: true }),
+    ).toEqual(["model ghost did not match this publication, so every evaluation is selected."]);
+  });
+
+  it("reports invalid parameters separately from ignored models", () => {
+    expect(
+      comparisonIgnoredNotices({
+        invalid: ["x", "sort"],
+        ignoredModels: ["ghost", "phantom"],
+        modelsFellBack: false,
+      }),
+    ).toEqual([
+      "model ghost, model phantom did not match this publication, so the selection kept only the known evaluations.",
+      "x, sort did not match this publication, so the defaults were used for those parameters.",
+    ]);
+    expect(
+      comparisonIgnoredNotices({ invalid: [], ignoredModels: [], modelsFellBack: false }),
+    ).toEqual([]);
+  });
+});
+
+describe("chart empty states", () => {
+  it("names the cost-axis rule when only cost exclusions remain", () => {
+    expect(
+      chartEmptyMessage([
+        { evaluationId: "a", label: "a · high", reason: { kind: "cost-zero" } },
+        { evaluationId: "b", label: "b · high", reason: { kind: "cost-unknown" } },
+      ]),
+    ).toBe(
+      "Cost axes exclude evaluations reported as $0 and evaluations with no reported cost, so there is nothing to plot.",
+    );
+  });
+
+  it("falls back to the selection and axis-metric messages", () => {
+    expect(chartEmptyMessage([])).toBe(
+      "No evaluation is selected; select at least one model to plot.",
+    );
+    expect(
+      chartEmptyMessage([
+        {
+          evaluationId: "a",
+          label: "a · high",
+          reason: { kind: "metric-unknown", metric: "tokens" },
+        },
+        { evaluationId: "b", label: "b · high", reason: { kind: "cost-zero" } },
+      ]),
+    ).toBe("No selected evaluation reports both axis metrics, so there is nothing to plot.");
   });
 });
 
