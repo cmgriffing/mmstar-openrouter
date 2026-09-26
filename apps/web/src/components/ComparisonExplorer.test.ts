@@ -73,9 +73,20 @@ describe("comparison island render", () => {
     initialCostScale: "log" as const,
   };
 
-  it("renders the picker count, chart points, and table in the initial sort order", () => {
+  it("renders both triggers, one live region, the chart controls, and the table in the initial sort order", () => {
     const html = renderToStaticMarkup(createElement(ComparisonExplorer, props));
     expect(html).toContain("2 of 2 evaluations");
+    // Two triggers, both carrying the one selection count.
+    expect(html.match(/picker-trigger-count[^>]*>2 of 2 evaluations/g) ?? []).toHaveLength(2);
+    expect(html).toContain("above chart");
+    expect(html).toContain("above table");
+    // Exactly one live region carries the count: the picker owns none, and the
+    // chart's excluded-points warning is a separate region.
+    expect(html.match(/role="status"[^>]*>2 of 2 evaluations/g) ?? []).toHaveLength(1);
+    // Axis and cost-scale controls render through the explorer, not the chart.
+    expect(html).toContain('id="chart-axis-x"');
+    expect(html).toContain('id="chart-axis-y"');
+    expect(html).toContain("Cost scale");
     expect(html.match(/chart-point-button/g) ?? []).toHaveLength(2);
     const table = html.slice(html.indexOf("comparison-table"));
     expect(table.indexOf("alpha")).toBeLessThan(table.indexOf("beta"));
@@ -88,6 +99,10 @@ describe("comparison island render", () => {
     expect(html).toContain("0 of 2 evaluations");
     expect(html).toContain("No models selected");
     expect(html).not.toContain("comparison-table");
+    // The table-side trigger survives the empty selection so it can recover.
+    expect(html.match(/picker-trigger-count[^>]*>0 of 2 evaluations/g) ?? []).toHaveLength(2);
+    expect(html.match(/role="status"[^>]*>0 of 2 evaluations/g) ?? []).toHaveLength(1);
+    expect(html).toContain("above table");
   });
 });
 
@@ -96,6 +111,7 @@ describe("ModelPicker initial render", () => {
     const groups = groupEvaluations([alpha, beta]);
     const html = renderToStaticMarkup(
       createElement(ModelPicker, {
+        context: "above chart",
         groups,
         selection: null,
         selectedCount: groups.length,
@@ -107,6 +123,8 @@ describe("ModelPicker initial render", () => {
       }),
     );
     expect(html).toContain("2 of 2 evaluations");
+    expect(html).toContain("above chart");
+    expect(html).not.toContain('role="status"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("Models and reasoning efforts");
   });
@@ -132,8 +150,6 @@ describe("QuadrantChart bounded axis render", () => {
         x: "cost",
         y: "pass",
         costScale: "log",
-        onAxisChange: noop,
-        onCostScaleChange: noop,
       }),
     );
     expect(html).toContain("100%");

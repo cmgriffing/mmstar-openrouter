@@ -724,10 +724,17 @@ main {
   gap: 16px;
 }
 
-.selector-bar {
-  border: 1px solid var(--rule);
-  background: var(--paper-raised);
-  padding: 12px 16px 14px;
+/* Toolbar and chart travel together: the island's 16px grid gap applies
+   around this block, not between the controls row and the figure. */
+.chart-block {
+  display: grid;
+  gap: 4px;
+}
+
+/* Second picker trigger, directly above the comparison table. */
+.table-controls {
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* Searchable model/effort picker: count-only trigger plus a non-modal panel. */
@@ -748,7 +755,7 @@ main {
   background: var(--paper-raised);
   border: 1px solid var(--rule-strong);
   border-radius: 2px;
-  padding: 9px 12px;
+  padding: 6px 12px;
   cursor: pointer;
 }
 
@@ -769,7 +776,8 @@ main {
   z-index: 20;
   top: calc(100% + 6px);
   right: 0;
-  left: 0;
+  left: auto;
+  min-width: 280px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -933,7 +941,21 @@ main {
   flex-wrap: wrap;
   gap: 12px 16px;
   align-items: flex-end;
-  padding: 10px 0 4px;
+  padding: 10px 0 0;
+}
+
+/* A browser sizes a select content box from font metrics, which change
+   between the webfont and its fallback; pin every control in the row so the
+   heights cannot drift with whichever font loads. */
+.chart-controls select,
+.chart-scale .button,
+.picker-trigger {
+  height: 32px;
+}
+
+/* The selection trigger closes the controls row on the right. */
+.chart-controls .picker {
+  margin-left: auto;
 }
 
 .field-label {
@@ -956,6 +978,7 @@ main {
 }
 
 .chart-scale .button {
+  font-size: 12.5px;
   border-radius: 0;
 }
 
@@ -1363,6 +1386,19 @@ main {
     transform: translate(-50%, calc(-100% - 8px));
     min-width: 160px;
   }
+
+  /* Compact triggers drop back to full width; the panel spans the trigger. */
+  .chart-controls .picker,
+  .table-controls .picker {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .picker-panel {
+    left: 0;
+    right: 0;
+    min-width: 0;
+  }
 }
 
 /* Author display rules on mobile rows must not override the `hidden` attribute:
@@ -1385,7 +1421,7 @@ main {
   .topnav,
   .filter-bar,
   .pagination,
-  .selector-bar,
+  .table-controls,
   .chart-controls {
     display: none;
   }

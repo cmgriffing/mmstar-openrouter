@@ -25,3 +25,16 @@ describe("hidden picker panel", () => {
     expect(css).toMatch(/\.picker-panel\[hidden\]\s*\{[^}]*display:\s*none/);
   });
 });
+
+/**
+ * Regression guard for the compact comparison controls: both picker rows are
+ * interactive chrome and must stay out of the printed report.
+ */
+describe("print-hidden comparison controls", () => {
+  it("hides the chart and table control rows in print", () => {
+    const printBlock = css.slice(css.indexOf("@media print"));
+    expect(printBlock).toContain(".table-controls");
+    expect(printBlock).toContain(".chart-controls");
+    expect(printBlock).toMatch(/display:\s*none/);
+  });
+});
