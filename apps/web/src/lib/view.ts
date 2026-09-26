@@ -195,10 +195,12 @@ export interface ComparisonFilterResult {
   values: ComparisonFilterValues;
   /** Parameters that were present but invalid. */
   invalid: string[];
-  /** Evaluation IDs in `models` that are not part of the publication. */
+  /** Evaluation IDs in `models` that are not part of the current results. */
   ignoredModels: string[];
   /** True when a non-empty `models` parameter named only unknown IDs and fell back to all. */
   modelsFellBack: boolean;
+  /** Parameters that were present and valid but adjusted to keep the pair distinct. */
+  repaired: string[];
 }
 
 function readMetricParam(
@@ -217,7 +219,7 @@ function readMetricParam(
 }
 
 /**
- * Validate comparison URL parameters against the publication's evaluations,
+ * Validate comparison URL parameters against the current results' evaluations,
  * mirroring `readFixtureFilters`: unknown evaluation IDs and unknown metric,
  * sort, direction, or scale values are dropped and reported. An absent `models`
  * parameter means every evaluation is selected; `models=` selects none.
@@ -228,6 +230,7 @@ export function readComparisonFilters(
 ): ComparisonFilterResult {
   const invalid: string[] = [];
   const ignoredModels: string[] = [];
+  const repaired: string[] = [];
   let modelsFellBack = false;
 
   let models: string[] | null = null;
@@ -257,10 +260,13 @@ export function readComparisonFilters(
   }
 
   const x = readMetricParam(params, "x", invalid) ?? DEFAULT_COMPARISON_AXIS_X;
-  let y = readMetricParam(params, "y", invalid) ?? DEFAULT_COMPARISON_AXIS_Y;
+  const explicitY = readMetricParam(params, "y", invalid);
+  let y = explicitY ?? DEFAULT_COMPARISON_AXIS_Y;
   if (x === y) {
-    // A degenerate pair is repaired instead of rendered: keep x and move y.
-    if (params.has("y")) invalid.push("y");
+    // A degenerate pair is repaired instead of rendered: keep x and move y. A
+    // valid explicit `y` is reported as repaired; an absent or invalid `y` is
+    // already covered by the defaults or the invalid list.
+    if (explicitY !== null) repaired.push("y");
     y = x === DEFAULT_COMPARISON_AXIS_X ? DEFAULT_COMPARISON_AXIS_Y : DEFAULT_COMPARISON_AXIS_X;
   }
 
@@ -287,18 +293,26 @@ export function readComparisonFilters(
     else invalid.push("dir");
   }
 
-  return { values: { models, x, y, scale, sort, dir }, invalid, ignoredModels, modelsFellBack };
+  return {
+    values: { models, x, y, scale, sort, dir },
+    invalid,
+    ignoredModels,
+    modelsFellBack,
+    repaired,
+  };
 }
 
 export interface ComparisonIgnoredFilters {
   invalid: string[];
   ignoredModels: string[];
   modelsFellBack: boolean;
+  repaired: string[];
 }
 
 /**
- * Human-readable notices for dropped parameters. A partial `models` match does
- * not claim a full fallback; an all-unknown `models` parameter does.
+ * Human-readable notices for dropped or adjusted parameters. A partial
+ * `models` match does not claim a full fallback; an all-unknown `models`
+ * parameter does. A collision repair is reported as adjusted, not unknown.
  */
 export function comparisonIgnoredNotices(result: ComparisonIgnoredFilters): string[] {
   const notices: string[] = [];
@@ -306,13 +320,18 @@ export function comparisonIgnoredNotices(result: ComparisonIgnoredFilters): stri
     const names = result.ignoredModels.map((id) => `model ${id}`).join(", ");
     notices.push(
       result.modelsFellBack
-        ? `${names} did not match this publication, so every evaluation is selected.`
-        : `${names} did not match this publication, so the selection kept only the known evaluations.`,
+        ? `${names} did not match the current results, so every evaluation is selected.`
+        : `${names} did not match the current results, so the selection kept only the known evaluations.`,
+    );
+  }
+  if (result.repaired.length > 0) {
+    notices.push(
+      `${result.repaired.join(", ")} was adjusted because the two axes cannot show the same metric.`,
     );
   }
   if (result.invalid.length > 0) {
     notices.push(
-      `${result.invalid.join(", ")} did not match this publication, so the defaults were used for those parameters.`,
+      `${result.invalid.join(", ")} did not match the current results, so the defaults were used for those parameters.`,
     );
   }
   return notices;
@@ -383,16 +402,20 @@ export function toggleComparisonSelection(
   return selected.size === allIds.length ? null : allIds.filter((id) => selected.has(id));
 }
 
-/** Toggle a whole model group; a partially selected group gains its missing rows. */
-export function toggleComparisonGroup(
+/**
+ * Toggle exactly the given rows: the whole group with no filter, or the
+ * group's visible subset under one. A fully selected set is removed; any
+ * partial set is completed. A full resulting selection collapses to `null`.
+ */
+export function toggleComparisonVisibleGroup(
   selection: ComparisonSelection,
   allIds: readonly string[],
-  groupIds: readonly string[],
+  visibleIds: readonly string[],
 ): ComparisonSelection {
   const selected = new Set(selection ?? allIds);
-  const allSelected = groupIds.every((id) => selected.has(id));
-  for (const id of groupIds) {
-    if (allSelected) selected.delete(id);
+  const allVisible = visibleIds.every((id) => selected.has(id));
+  for (const id of visibleIds) {
+    if (allVisible) selected.delete(id);
     else selected.add(id);
   }
   return selected.size === allIds.length ? null : allIds.filter((id) => selected.has(id));
@@ -421,6 +444,143 @@ export function matrixRowHidden(
 /** An explicit empty selection hides the matrix table and shows its empty panel. */
 export function matrixEmptySelection(selectedIds: ReadonlySet<string> | null): boolean {
   return selectedIds !== null && selectedIds.size === 0;
+}
+
+/* --------------------------------------------------------- comparison picker */
+
+/**
+ * Reasoning-mode intensity order for the picker: `default` first (it omits the
+ * reasoning parameter and is the baseline), then increasing effort. Modes
+ * outside this vocabulary sort last rather than disappearing, so a future
+ * mode degrades to "at the end" instead of breaking the list.
+ */
+export const REASONING_MODE_ORDER = [
+  "default",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+const REASONING_MODE_RANK = new Map<string, number>(
+  REASONING_MODE_ORDER.map((mode, index) => [mode, index]),
+);
+
+/** Intensity order for efforts; equal (unknown) modes fall back to text order. */
+export function compareReasoningModes(a: string, b: string): number {
+  const rank =
+    (REASONING_MODE_RANK.get(a) ?? REASONING_MODE_ORDER.length) -
+    (REASONING_MODE_RANK.get(b) ?? REASONING_MODE_ORDER.length);
+  return rank !== 0 ? rank : compareText(a, b);
+}
+
+export interface ComparisonGroup {
+  alias: string;
+  /** Router ID shared by the alias's evaluations; the picker's sub-line. */
+  openRouterId: string;
+  /** The alias's evaluations in reasoning-mode intensity order. */
+  rows: EvaluationComparison[];
+}
+
+/** Group evaluations by model alias; both groups and efforts in display order. */
+export function groupEvaluations(rows: EvaluationComparison[]): ComparisonGroup[] {
+  const byAlias = new Map<string, EvaluationComparison[]>();
+  for (const row of rows) {
+    const group = byAlias.get(row.modelAlias);
+    if (group === undefined) byAlias.set(row.modelAlias, [row]);
+    else group.push(row);
+  }
+  return [...byAlias.entries()]
+    .map(([alias, groupRows]) => {
+      const sorted = [...groupRows].sort(
+        (a, b) =>
+          compareReasoningModes(a.reasoningMode, b.reasoningMode) ||
+          compareText(a.evaluationId, b.evaluationId),
+      );
+      return { alias, openRouterId: sorted[0]?.openRouterId ?? "", rows: sorted };
+    })
+    .sort((a, b) => compareText(a.alias, b.alias));
+}
+
+export interface ComparisonPickerGroup {
+  alias: string;
+  openRouterId: string;
+  /** Rows visible under the current filter, in reasoning-mode intensity order. */
+  rows: EvaluationComparison[];
+  /** Visible rows under the current filter. */
+  visibleCount: number;
+  /** Selected evaluations among the visible rows. */
+  selectedCount: number;
+}
+
+/**
+ * Narrow grouped evaluations to the picker's visible rows. A query matches
+ * case-insensitively against model alias, OpenRouter ID, and reasoning mode;
+ * an alias/ID match keeps every effort in the group, an effort match keeps only
+ * the matching rows. Counts describe exactly the visible rows, so a group
+ * checkbox under a filter controls what the operator can see.
+ */
+export function filterComparisonGroups(
+  groups: readonly ComparisonGroup[],
+  query: string,
+  selection: ComparisonSelection,
+): ComparisonPickerGroup[] {
+  const needle = query.trim().toLowerCase();
+  const selected = selection === null ? null : new Set(selection);
+  const visible: ComparisonPickerGroup[] = [];
+  for (const group of groups) {
+    let rows: EvaluationComparison[];
+    if (needle === "") {
+      rows = group.rows;
+    } else if (
+      group.alias.toLowerCase().includes(needle) ||
+      group.rows.some((row) => row.openRouterId.toLowerCase().includes(needle))
+    ) {
+      rows = group.rows;
+    } else {
+      rows = group.rows.filter((row) => row.reasoningMode.toLowerCase().includes(needle));
+    }
+    if (rows.length === 0) continue;
+    visible.push({
+      alias: group.alias,
+      openRouterId: group.openRouterId,
+      rows,
+      visibleCount: rows.length,
+      selectedCount: rows.filter((row) => selected === null || selected.has(row.evaluationId))
+        .length,
+    });
+  }
+  return visible;
+}
+
+export interface ComparisonMatchingAction {
+  /** Visible rows the action applies to. */
+  count: number;
+  intent: "select" | "deselect";
+  label: string;
+}
+
+/**
+ * Footer action for the filtered rows: select when any visible row is
+ * unselected, deselect when every visible row is selected. `null` when the
+ * filter shows nothing, so an empty result offers no bulk action.
+ */
+export function selectMatchingAction(
+  visibleIds: readonly string[],
+  selection: ComparisonSelection,
+): ComparisonMatchingAction | null {
+  if (visibleIds.length === 0) return null;
+  const selected = selection === null ? null : new Set(selection);
+  const allSelected =
+    selected === null || visibleIds.every((evaluationId) => selected.has(evaluationId));
+  return {
+    count: visibleIds.length,
+    intent: allSelected ? "deselect" : "select",
+    label: `${allSelected ? "Deselect" : "Select"} ${formatCount(visibleIds.length)} matching`,
+  };
 }
 
 /* -------------------------------------------------------- comparison sorting */
@@ -719,12 +879,23 @@ function niceStep(range: number, targetCount: number): number {
   return step * magnitude;
 }
 
+/** Natural limits for a metric axis; padding and ticks stay inside them. */
+export interface ChartAxisBounds {
+  min?: number | undefined;
+  max?: number | undefined;
+}
+
 /**
  * Linear or log10 axis scale with readable ticks. Log axes require positive
  * values (cost exclusions guarantee that); a single value is padded so a lone
- * point sits mid-axis instead of degenerating.
+ * point sits mid-axis instead of degenerating. Optional bounds keep bounded
+ * metrics honest: a pass rate never produces ticks above 100% or below 0%.
  */
-export function buildChartAxisScale(values: number[], log: boolean): ChartAxisScale | null {
+export function buildChartAxisScale(
+  values: number[],
+  log: boolean,
+  bounds: ChartAxisBounds = {},
+): ChartAxisScale | null {
   const finite = values.filter((value) => Number.isFinite(value));
   if (finite.length === 0) return null;
   let min = Math.min(...finite);
@@ -765,17 +936,25 @@ export function buildChartAxisScale(values: number[], log: boolean): ChartAxisSc
     min -= pad;
     max += pad;
   }
+  // Clamp the padded range, then the tick domain, to the metric's limits so a
+  // padded or rounded domain never invents impossible tick labels.
+  if (bounds.min !== undefined && min < bounds.min) min = bounds.min;
+  if (bounds.max !== undefined && max > bounds.max) max = bounds.max;
+  if (min === max) return null;
+
+  const lower = bounds.min ?? Number.NEGATIVE_INFINITY;
+  const upper = bounds.max ?? Number.POSITIVE_INFINITY;
   let step = niceStep(max - min, 5);
-  let domainMin = Math.floor(min / step) * step;
-  let domainMax = Math.ceil(max / step) * step;
-  while (Math.round((domainMax - domainMin) / step) > 8) {
+  let domainMin = Math.max(Math.floor(min / step) * step, lower);
+  let domainMax = Math.min(Math.ceil(max / step) * step, upper);
+  while (Math.floor((domainMax - domainMin) / step + 1e-9) > 8) {
     step *= 2;
-    domainMin = Math.floor(min / step) * step;
-    domainMax = Math.ceil(max / step) * step;
+    domainMin = Math.max(Math.floor(min / step) * step, lower);
+    domainMax = Math.min(Math.ceil(max / step) * step, upper);
   }
   if (domainMin === domainMax) domainMax = domainMin + step;
   const position = (value: number): number => (value - domainMin) / (domainMax - domainMin);
-  const count = Math.round((domainMax - domainMin) / step);
+  const count = Math.floor((domainMax - domainMin) / step + 1e-9);
   const decimals = Math.min(20, Math.max(0, Math.ceil(-Math.log10(step)) + 1));
   const ticks: ChartTick[] = [];
   for (let index = 0; index <= count; index += 1) {

@@ -24,21 +24,22 @@ import {
 } from "../lib/format";
 import type { ComparisonMetric, ComparisonSortColumn, CostScale, SortDirection } from "../lib/view";
 import {
-  compareText,
   comparisonChartSeries,
   comparisonCost,
   comparisonCountLabel,
   comparisonHref,
   comparisonQueryString,
+  groupEvaluations,
   isIncomplete,
   matrixEmptySelection,
   matrixRowHidden,
   nextComparisonAxes,
   nextComparisonSort,
   sortComparisonRows,
-  toggleComparisonGroup,
   toggleComparisonSelection,
+  toggleComparisonVisibleGroup,
 } from "../lib/view";
+import ModelPicker from "./ModelPicker";
 import QuadrantChart from "./QuadrantChart";
 
 export interface ComparisonExplorerProps {
@@ -52,31 +53,11 @@ export interface ComparisonExplorerProps {
   initialCostScale: CostScale;
 }
 
-interface EvaluationGroup {
-  alias: string;
-  rows: EvaluationComparison[];
-}
-
 interface OutcomeChip {
   label: string;
   symbol: string;
   tone: "good" | "bad" | "warn" | "neutral";
   count: number;
-}
-
-function groupEvaluations(rows: EvaluationComparison[]): EvaluationGroup[] {
-  const byAlias = new Map<string, EvaluationComparison[]>();
-  for (const row of rows) {
-    const group = byAlias.get(row.modelAlias);
-    if (group === undefined) byAlias.set(row.modelAlias, [row]);
-    else group.push(row);
-  }
-  return [...byAlias.entries()]
-    .map(([alias, groupRows]) => ({
-      alias,
-      rows: [...groupRows].sort((a, b) => compareText(a.reasoningMode, b.reasoningMode)),
-    }))
-    .sort((a, b) => compareText(a.alias, b.alias));
 }
 
 function outcomeChips(row: EvaluationComparison): OutcomeChip[] {
@@ -168,16 +149,12 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
     }
   }, [selectedSet, selectedRows.length, comparisons.length]);
 
-  function isSelected(evaluationId: string): boolean {
-    return selectedSet === null || selectedSet.has(evaluationId);
-  }
-
   function toggleEvaluation(evaluationId: string): void {
     setSelection(toggleComparisonSelection(selection, allIds, evaluationId));
   }
 
-  function toggleGroup(groupIds: string[]): void {
-    setSelection(toggleComparisonGroup(selection, allIds, groupIds));
+  function toggleVisibleGroup(visibleIds: string[]): void {
+    setSelection(toggleComparisonVisibleGroup(selection, allIds, visibleIds));
   }
 
   function changeAxis(axis: "x" | "y", metric: ComparisonMetric): void {
@@ -228,68 +205,16 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
   return (
     <div className="comparison-island">
       <div className="selector-bar">
-        <fieldset className="model-selector">
-          <legend className="kicker">Models &amp; reasoning efforts</legend>
-          <div className="model-groups">
-            {groups.map((group) => {
-              const selectedCount = group.rows.filter((row) => isSelected(row.evaluationId)).length;
-              const groupAll = selectedCount === group.rows.length;
-              const groupSome = selectedCount > 0 && selectedCount < group.rows.length;
-              return (
-                <div className="model-group" key={group.alias}>
-                  <label className="model-group-toggle">
-                    <input
-                      type="checkbox"
-                      checked={groupAll}
-                      ref={(input) => {
-                        if (input !== null) input.indeterminate = groupSome;
-                      }}
-                      onChange={() => toggleGroup(group.rows.map((row) => row.evaluationId))}
-                    />
-                    <span className="model-group-name">{group.alias}</span>
-                    <span className="model-group-count mono">
-                      {selectedCount}/{group.rows.length}
-                    </span>
-                  </label>
-                  <div className="effort-list">
-                    {group.rows.map((row) => (
-                      <label className="effort-toggle" key={row.evaluationId}>
-                        <input
-                          type="checkbox"
-                          checked={isSelected(row.evaluationId)}
-                          aria-label={`${group.alias} · ${row.reasoningMode}`}
-                          onChange={() => toggleEvaluation(row.evaluationId)}
-                        />
-                        <span className="mono">{row.reasoningMode}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </fieldset>
-        <div className="selector-tools">
-          <p className="status-line" role="status" aria-live="polite">
-            {comparisonCountLabel(selectedRows.length, comparisons.length)} selected
-          </p>
-          <button
-            type="button"
-            className="button button--quiet"
-            onClick={() => setSelection(null)}
-            disabled={selection === null}
-          >
-            Select all
-          </button>
-          <button
-            type="button"
-            className="button button--quiet"
-            onClick={() => setSelection([])}
-            disabled={selection !== null && selection.length === 0}
-          >
-            Clear all
-          </button>
-        </div>
+        <ModelPicker
+          groups={groups}
+          selection={selection}
+          selectedCount={selectedRows.length}
+          total={comparisons.length}
+          onToggleEvaluation={toggleEvaluation}
+          onToggleVisibleGroup={toggleVisibleGroup}
+          onSelectAll={() => setSelection(null)}
+          onClearAll={() => setSelection([])}
+        />
       </div>
 
       <QuadrantChart

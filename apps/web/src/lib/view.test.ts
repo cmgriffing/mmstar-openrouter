@@ -7,6 +7,7 @@ import {
   categoryMatrix,
   chartEmptyMessage,
   chartExclusionText,
+  compareReasoningModes,
   comparisonChartSeries,
   comparisonCost,
   comparisonCountLabel,
@@ -14,7 +15,9 @@ import {
   comparisonIgnoredNotices,
   comparisonQueryString,
   costExclusion,
+  filterComparisonGroups,
   fixtureQueryString,
+  groupEvaluations,
   isIncomplete,
   matrixEmptySelection,
   matrixRowHidden,
@@ -28,9 +31,10 @@ import {
   publicationSettingIssues,
   readComparisonFilters,
   readFixtureFilters,
+  selectMatchingAction,
   sortComparisonRows,
-  toggleComparisonGroup,
   toggleComparisonSelection,
+  toggleComparisonVisibleGroup,
   unresolvedCount,
 } from "./view";
 
@@ -278,7 +282,30 @@ describe("comparison filter sanitization", () => {
     expect(result.values.scale).toBe("log");
     expect(result.values.sort).toBe("accuracy");
     expect(result.values.dir).toBe("desc");
-    expect(result.invalid).toEqual(["x", "y", "scale", "sort", "dir"]);
+    expect(result.invalid).toEqual(["x", "scale", "sort", "dir"]);
+    expect(result.repaired).toEqual(["y"]);
+  });
+
+  it("reports a valid colliding y as repaired rather than unknown", () => {
+    const result = readComparisonFilters(new URLSearchParams({ x: "speed", y: "speed" }), context);
+    expect(result.values).toEqual({
+      models: null,
+      x: "speed",
+      y: "cost",
+      scale: "log",
+      sort: "accuracy",
+      dir: "desc",
+    });
+    expect(result.invalid).toEqual([]);
+    expect(result.repaired).toEqual(["y"]);
+  });
+
+  it("does not double-report an invalid y that collides after falling back to its default", () => {
+    const result = readComparisonFilters(new URLSearchParams({ x: "pass", y: "nope" }), context);
+    expect(result.values.x).toBe("pass");
+    expect(result.values.y).toBe("cost");
+    expect(result.invalid).toEqual(["y"]);
+    expect(result.repaired).toEqual([]);
   });
 
   it("accepts explicit axis, scale, and sort values", () => {
@@ -533,6 +560,22 @@ describe("chart helpers", () => {
     expect(linear?.ticks.length).toBeGreaterThan(1);
   });
 
+  it("keeps bounded ticks inside the metric's limits", () => {
+    const bounds = { min: 0, max: 1 };
+    for (const values of [[1], [0, 0], [0.99], [0.5, 1]]) {
+      const scale = buildChartAxisScale(values, false, bounds);
+      expect(scale).not.toBeNull();
+      const ticks = scale?.ticks ?? [];
+      expect(ticks.length).toBeGreaterThan(1);
+      expect(ticks.every((tick) => tick.value >= 0 && tick.value <= 1)).toBe(true);
+      // Rounding to display precision can move a tick a hair outside the domain.
+      const epsilon = 1e-9;
+      expect(ticks.every((tick) => tick.position >= -epsilon && tick.position <= 1 + epsilon)).toBe(
+        true,
+      );
+    }
+  });
+
   it("keeps linear ticks unique and monotonic for a large base with a small step", () => {
     const scale = buildChartAxisScale([1e12, 1e12 + 0.5], false);
     const values = scale?.ticks.map((tick) => tick.value) ?? [];
@@ -563,16 +606,152 @@ describe("comparison selection transitions", () => {
   });
 
   it("toggles whole groups from the full, partial, and empty states", () => {
-    expect(toggleComparisonGroup(null, all, ["alpha::high", "alpha::low"])).toEqual(["beta::high"]);
-    expect(toggleComparisonGroup(["beta::high"], all, ["alpha::high", "alpha::low"])).toBeNull();
-    expect(toggleComparisonGroup(["alpha::high"], all, ["alpha::low"])).toEqual([
+    expect(toggleComparisonVisibleGroup(null, all, ["alpha::high", "alpha::low"])).toEqual([
+      "beta::high",
+    ]);
+    expect(
+      toggleComparisonVisibleGroup(["beta::high"], all, ["alpha::high", "alpha::low"]),
+    ).toBeNull();
+    expect(toggleComparisonVisibleGroup(["alpha::high"], all, ["alpha::low"])).toEqual([
       "alpha::high",
       "alpha::low",
     ]);
-    expect(toggleComparisonGroup([], all, ["alpha::low", "beta::high"])).toEqual([
+    expect(toggleComparisonVisibleGroup([], all, ["alpha::low", "beta::high"])).toEqual([
       "alpha::low",
       "beta::high",
     ]);
+  });
+});
+
+describe("comparison picker helpers", () => {
+  function pickerRows(): EvaluationComparison[] {
+    return [
+      comparison({
+        evaluationId: "alpha::max",
+        modelAlias: "alpha",
+        openRouterId: "vendor/alpha",
+        reasoningMode: "max",
+      }),
+      comparison({
+        evaluationId: "alpha::high",
+        modelAlias: "alpha",
+        openRouterId: "vendor/alpha",
+        reasoningMode: "high",
+      }),
+      comparison({
+        evaluationId: "alpha::default",
+        modelAlias: "alpha",
+        openRouterId: "vendor/alpha",
+        reasoningMode: "default",
+      }),
+      comparison({
+        evaluationId: "beta::none",
+        modelAlias: "beta",
+        openRouterId: "vendor/beta",
+        reasoningMode: "none",
+      }),
+      comparison({
+        evaluationId: "beta::bogus",
+        modelAlias: "beta",
+        openRouterId: "vendor/beta",
+        reasoningMode: "bogus",
+      }),
+    ];
+  }
+
+  const all = pickerRows().map((row) => row.evaluationId);
+
+  it("orders efforts by intensity with unknown modes last", () => {
+    const groups = groupEvaluations(pickerRows());
+    expect(groups.map((group) => group.alias)).toEqual(["alpha", "beta"]);
+    expect(groups[0]?.rows.map((row) => row.reasoningMode)).toEqual(["default", "high", "max"]);
+    expect(groups[1]?.rows.map((row) => row.reasoningMode)).toEqual(["none", "bogus"]);
+    expect(compareReasoningModes("xhigh", "max")).toBeLessThan(0);
+    expect(compareReasoningModes("bogus", "max")).toBeGreaterThan(0);
+    expect(compareReasoningModes("bogus-a", "bogus-b")).toBeLessThan(0);
+  });
+
+  it("matches alias and OpenRouter ID case-insensitively, keeping every effort", () => {
+    const groups = groupEvaluations(pickerRows());
+    const byAlias = filterComparisonGroups(groups, " ALPHA ", null);
+    expect(byAlias.map((group) => group.alias)).toEqual(["alpha"]);
+    expect(byAlias[0]?.rows.map((row) => row.reasoningMode)).toEqual(["default", "high", "max"]);
+
+    const byId = filterComparisonGroups(groups, "vendor/BETA", null);
+    expect(byId.map((group) => group.alias)).toEqual(["beta"]);
+    expect(byId[0]?.rows.map((row) => row.reasoningMode)).toEqual(["none", "bogus"]);
+
+    expect(filterComparisonGroups(groups, "nothing-matches", null)).toEqual([]);
+  });
+
+  it("matches effort names and keeps only the matching rows", () => {
+    const filtered = filterComparisonGroups(groupEvaluations(pickerRows()), "HIGH", null);
+    expect(filtered.map((group) => group.alias)).toEqual(["alpha"]);
+    expect(filtered[0]?.rows.map((row) => row.reasoningMode)).toEqual(["high"]);
+    expect(filtered[0]?.visibleCount).toBe(1);
+  });
+
+  it("shows one matching row per model for an effort query", () => {
+    const groups = groupEvaluations([
+      comparison({ evaluationId: "alpha::high", modelAlias: "alpha", reasoningMode: "high" }),
+      comparison({ evaluationId: "alpha::low", modelAlias: "alpha", reasoningMode: "low" }),
+      comparison({ evaluationId: "beta::high", modelAlias: "beta", reasoningMode: "high" }),
+      comparison({ evaluationId: "beta::none", modelAlias: "beta", reasoningMode: "none" }),
+    ]);
+    const filtered = filterComparisonGroups(groups, "high", null);
+    expect(
+      filtered.map((group) => [group.alias, group.rows.map((row) => row.reasoningMode)]),
+    ).toEqual([
+      ["alpha", ["high"]],
+      ["beta", ["high"]],
+    ]);
+    expect(filtered.map((group) => group.visibleCount)).toEqual([1, 1]);
+  });
+
+  it("counts selected rows among the visible subset", () => {
+    const groups = groupEvaluations(pickerRows());
+    const byEffort = filterComparisonGroups(groups, "high", ["alpha::default", "alpha::high"]);
+    expect(byEffort[0]).toMatchObject({ alias: "alpha", visibleCount: 1, selectedCount: 1 });
+    const byAlias = filterComparisonGroups(groups, "alpha", ["alpha::default"]);
+    expect(byAlias[0]).toMatchObject({ visibleCount: 3, selectedCount: 1 });
+    const noneSelected = filterComparisonGroups(groups, "max", ["alpha::high"]);
+    expect(noneSelected[0]).toMatchObject({ visibleCount: 1, selectedCount: 0 });
+  });
+
+  it("toggles exactly the visible rows and collapses a full selection to null", () => {
+    expect(toggleComparisonVisibleGroup(null, all, ["alpha::high"])).toEqual([
+      "alpha::max",
+      "alpha::default",
+      "beta::none",
+      "beta::bogus",
+    ]);
+    expect(
+      toggleComparisonVisibleGroup(
+        ["alpha::max", "alpha::default", "beta::none", "beta::bogus"],
+        all,
+        ["alpha::high"],
+      ),
+    ).toBeNull();
+    // A partial visible subset is completed, not inverted.
+    expect(
+      toggleComparisonVisibleGroup(["alpha::high"], all, ["alpha::high", "alpha::max"]),
+    ).toEqual(["alpha::max", "alpha::high"]);
+  });
+
+  it("computes the matching action label and intent for mixed and full rows", () => {
+    const visible = ["alpha::default", "alpha::high"];
+    expect(selectMatchingAction(visible, null)).toEqual({
+      count: 2,
+      intent: "deselect",
+      label: "Deselect 2 matching",
+    });
+    expect(selectMatchingAction(visible, ["alpha::default"])).toEqual({
+      count: 2,
+      intent: "select",
+      label: "Select 2 matching",
+    });
+    expect(selectMatchingAction(visible, [...visible])).toMatchObject({ intent: "deselect" });
+    expect(selectMatchingAction([], null)).toBeNull();
   });
 });
 
@@ -608,13 +787,23 @@ describe("comparison labels and ignored-filter notices", () => {
 
   it("distinguishes a partial model match from a full fallback", () => {
     expect(
-      comparisonIgnoredNotices({ invalid: [], ignoredModels: ["ghost"], modelsFellBack: false }),
+      comparisonIgnoredNotices({
+        invalid: [],
+        ignoredModels: ["ghost"],
+        modelsFellBack: false,
+        repaired: [],
+      }),
     ).toEqual([
-      "model ghost did not match this publication, so the selection kept only the known evaluations.",
+      "model ghost did not match the current results, so the selection kept only the known evaluations.",
     ]);
     expect(
-      comparisonIgnoredNotices({ invalid: [], ignoredModels: ["ghost"], modelsFellBack: true }),
-    ).toEqual(["model ghost did not match this publication, so every evaluation is selected."]);
+      comparisonIgnoredNotices({
+        invalid: [],
+        ignoredModels: ["ghost"],
+        modelsFellBack: true,
+        repaired: [],
+      }),
+    ).toEqual(["model ghost did not match the current results, so every evaluation is selected."]);
   });
 
   it("reports invalid parameters separately from ignored models", () => {
@@ -623,14 +812,34 @@ describe("comparison labels and ignored-filter notices", () => {
         invalid: ["x", "sort"],
         ignoredModels: ["ghost", "phantom"],
         modelsFellBack: false,
+        repaired: [],
       }),
     ).toEqual([
-      "model ghost, model phantom did not match this publication, so the selection kept only the known evaluations.",
-      "x, sort did not match this publication, so the defaults were used for those parameters.",
+      "model ghost, model phantom did not match the current results, so the selection kept only the known evaluations.",
+      "x, sort did not match the current results, so the defaults were used for those parameters.",
     ]);
     expect(
-      comparisonIgnoredNotices({ invalid: [], ignoredModels: [], modelsFellBack: false }),
+      comparisonIgnoredNotices({
+        invalid: [],
+        ignoredModels: [],
+        modelsFellBack: false,
+        repaired: [],
+      }),
     ).toEqual([]);
+  });
+
+  it("reports a repaired axis separately from unknown parameters", () => {
+    expect(
+      comparisonIgnoredNotices({
+        invalid: ["x"],
+        ignoredModels: [],
+        modelsFellBack: false,
+        repaired: ["y"],
+      }),
+    ).toEqual([
+      "y was adjusted because the two axes cannot show the same metric.",
+      "x did not match the current results, so the defaults were used for those parameters.",
+    ]);
   });
 });
 
