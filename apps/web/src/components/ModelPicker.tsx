@@ -3,17 +3,25 @@
  * opens a dialog panel with a search field, tri-state model groups, effort
  * checkboxes, and bulk actions.
  *
- * Presentational over selection: the parent owns the selected evaluation IDs
- * and the URL sync. This component owns only ephemeral panel state (open,
- * query, collapsed groups), which never enters the URL. The grouped option
- * list renders only while the panel is open, so pages that never touch the
- * picker do not pay for the full option markup.
+ * Presentational over selection: the parent owns the selected evaluation IDs,
+ * the URL sync, and the single live region that announces selection changes
+ * (this component has none, so two instances cannot announce twice). This
+ * component owns only ephemeral panel state (open, query, collapsed groups),
+ * which never enters the URL. The grouped option list renders only while the
+ * panel is open, so pages that never touch the picker do not pay for the full
+ * option markup.
  */
 import { type ReactElement, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ComparisonGroup, ComparisonSelection } from "../lib/view";
 import { comparisonCountLabel, filterComparisonGroups, selectMatchingAction } from "../lib/view";
 
 export interface ModelPickerProps {
+  /**
+   * Position of this instance relative to the comparison surfaces; names the
+   * trigger and panel so the two instances are distinguishable to assistive
+   * technology without changing the visible count text.
+   */
+  context: "above chart" | "above table";
   /** Every evaluation grouped by alias, in display order. */
   groups: ComparisonGroup[];
   /** Selected evaluation IDs; `null` means every evaluation is selected. */
@@ -43,18 +51,24 @@ export default function ModelPicker(props: ModelPickerProps): ReactElement {
   const countLabel = comparisonCountLabel(selectedCount, total);
   const filtering = query.trim() !== "";
 
-  const selectedSet = useMemo(() => (selection === null ? null : new Set(selection)), [selection]);
+  // Panel-only derivations: they are recomputed from the current selection
+  // when the panel opens and skipped while it is closed, so a second picker
+  // instance adds no filtering work until it is actually used.
+  const selectedSet = useMemo(
+    () => (open && selection !== null ? new Set(selection) : null),
+    [open, selection],
+  );
   const visibleGroups = useMemo(
-    () => filterComparisonGroups(groups, query, selection),
-    [groups, query, selection],
+    () => (open ? filterComparisonGroups(groups, query, selection) : []),
+    [open, groups, query, selection],
   );
   const visibleIds = useMemo(
-    () => visibleGroups.flatMap((group) => group.rows.map((row) => row.evaluationId)),
-    [visibleGroups],
+    () => (open ? visibleGroups.flatMap((group) => group.rows.map((row) => row.evaluationId)) : []),
+    [open, visibleGroups],
   );
   const matchingAction = useMemo(
-    () => (filtering ? selectMatchingAction(visibleIds, selection) : null),
-    [filtering, visibleIds, selection],
+    () => (open && filtering ? selectMatchingAction(visibleIds, selection) : null),
+    [open, filtering, visibleIds, selection],
   );
 
   // Opening focuses the search field so a query can be typed immediately.
@@ -132,6 +146,7 @@ export default function ModelPicker(props: ModelPickerProps): ReactElement {
         <span className="picker-trigger-caret" aria-hidden="true">
           {open ? "▴" : "▾"}
         </span>
+        <span className="visually-hidden">{props.context}</span>
       </button>
 
       {opened && (
@@ -139,7 +154,7 @@ export default function ModelPicker(props: ModelPickerProps): ReactElement {
           className="picker-panel"
           id={panelId}
           role="dialog"
-          aria-label="Models and reasoning efforts"
+          aria-label={`Models and reasoning efforts ${props.context}`}
           hidden={!open}
         >
           <div className="picker-search">
@@ -251,10 +266,6 @@ export default function ModelPicker(props: ModelPickerProps): ReactElement {
           </div>
         </div>
       )}
-
-      <p className="visually-hidden" role="status" aria-live="polite">
-        {countLabel}
-      </p>
     </div>
   );
 }
