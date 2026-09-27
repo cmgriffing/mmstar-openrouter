@@ -2,6 +2,7 @@ import type { FailureRecord } from "@mmstar/results";
 import { describe, expect, it } from "vitest";
 import {
   computeRetryDelayMs,
+  RATE_LIMIT_HALT_THRESHOLD_MS,
   RETRY_MAX_DELAY_MS,
   RETRY_MIN_DELAY_MS,
   shouldRetryAttempt,
@@ -76,5 +77,41 @@ describe("computeRetryDelayMs", () => {
         random: half,
       }),
     ).toBe(0);
+  });
+
+  it("falls to X-RateLimit-Reset when Retry-After is absent, then to jittered backoff", () => {
+    // Retry-After wins outright even when a later reset signal is present.
+    expect(
+      computeRetryDelayMs({
+        attemptNumber: 3,
+        failure: failure({
+          category: "rate_limit",
+          retryAfterMs: 60_000,
+          rateLimitResetMs: 90_000,
+        }),
+        random: half,
+      }),
+    ).toBe(60_000);
+
+    expect(
+      computeRetryDelayMs({
+        attemptNumber: 1,
+        failure: failure({ category: "rate_limit", rateLimitResetMs: 90_000 }),
+        random: half,
+      }),
+    ).toBe(90_000);
+
+    // Stale or malformed reset yields no contribution: attempt 1 window [250, 1000].
+    expect(
+      computeRetryDelayMs({
+        attemptNumber: 1,
+        failure: failure({ category: "rate_limit", rateLimitResetMs: null }),
+        random: half,
+      }),
+    ).toBe(625);
+  });
+
+  it("exports a five-minute halt threshold", () => {
+    expect(RATE_LIMIT_HALT_THRESHOLD_MS).toBe(300_000);
   });
 });

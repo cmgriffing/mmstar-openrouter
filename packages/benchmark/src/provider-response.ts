@@ -10,10 +10,11 @@
 import type { CostRecord, FailureRecord, UsageRecord } from "@mmstar/results";
 import {
   classifyHttpFailure,
-  failureCategoryForStatus,
+  failureCategoryForStatusWithError,
   isJsonObject,
   type ProviderFailure,
   type ProviderResult,
+  parseRetrySignals,
   tryParseJson,
 } from "./provider-failure";
 
@@ -61,7 +62,7 @@ export function normalizeChatCompletion(
   if (parsed.error !== undefined && (choices === null || choices.length === 0)) {
     return {
       ok: false,
-      failure: classifyEmbeddedError(parsed.error, input.status),
+      failure: classifyEmbeddedError(parsed.error, input),
       rawResponse: parsed,
     };
   }
@@ -118,29 +119,41 @@ function unknownFailure(
   return { ok: false, failure, rawResponse };
 }
 
-/** Classify an `error` object delivered with a 2xx body. */
-function classifyEmbeddedError(error: unknown, httpStatus: number): FailureRecord {
+/**
+ * Classify an `error` object delivered with a 2xx body. Rate-limit headers are
+ * part of the response, so embedded errors keep the same retry signals the
+ * status path preserves; without them a 200-with-error 429 would silently
+ * restart from the short exponential backoff.
+ */
+function classifyEmbeddedError(error: unknown, input: NormalizeCompletionInput): FailureRecord {
+  const signals = parseRetrySignals(input.headers, input.now);
   if (typeof error === "string" && error.trim() !== "") {
-    return { category: "unknown", message: error.trim(), httpStatus, retryAfterMs: null };
+    return {
+      category: "unknown",
+      message: error.trim(),
+      httpStatus: input.status,
+      ...signals,
+    };
   }
   if (isJsonObject(error)) {
     const code = error.code;
-    const numericCode = typeof code === "number" && code >= 400 && code <= 599 ? code : httpStatus;
+    const numericCode =
+      typeof code === "number" && code >= 400 && code <= 599 ? code : input.status;
     const message = typeof error.message === "string" && error.message.trim() !== "";
     return {
-      category: failureCategoryForStatus(numericCode),
+      category: failureCategoryForStatusWithError(numericCode, error),
       message: message
         ? (error.message as string)
         : `embedded provider error (code ${numericCode})`,
       httpStatus: numericCode,
-      retryAfterMs: null,
+      ...signals,
     };
   }
   return {
     category: "unknown",
     message: "response contained an unrecognized embedded error",
-    httpStatus,
-    retryAfterMs: null,
+    httpStatus: input.status,
+    ...signals,
   };
 }
 

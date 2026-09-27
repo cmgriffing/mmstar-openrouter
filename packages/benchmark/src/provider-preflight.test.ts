@@ -1,7 +1,7 @@
-import type { EvaluationPlan, ReasoningMode } from "@mmstar/config";
+import type { EvaluationPlan } from "@mmstar/config";
 import { describe, expect, it } from "vitest";
 import { type ModelCatalog, parseModelCatalogResponse } from "./provider-metadata";
-import { decideReasoningRequest, preflightPlan } from "./provider-preflight";
+import { decideReasoningRequest, preflightPlan, resolveAllEfforts } from "./provider-preflight";
 
 const FETCHED_AT = "2026-09-23T00:00:00.000Z";
 
@@ -18,9 +18,7 @@ function imageModel(id: string, reasoning?: unknown): Record<string, unknown> {
   };
 }
 
-function planFor(
-  entries: readonly { alias: string; id: string; mode: ReasoningMode }[],
-): EvaluationPlan {
+function planFor(entries: readonly { alias: string; id: string; mode: string }[]): EvaluationPlan {
   return {
     planVersion: 1,
     setName: "demo",
@@ -244,6 +242,137 @@ describe("preflightPlan", () => {
     expect(result.preflight.capabilities).toHaveLength(1);
     expect(result.preflight.evaluations).toHaveLength(2);
   });
+
+  it("rejects a plan that still contains the unresolved all sentinel", () => {
+    const catalog = catalogOf([imageModel("vendor/all", { supported_efforts: null })]);
+    const result = preflightPlan(planFor([{ alias: "a", id: "vendor/all", mode: "all" }]), catalog);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues[0]?.code).toBe("unsupported_reasoning_effort");
+    expect(result.issues[0]?.path).toBe("plan.evaluations[0].reasoningMode");
+    expect(result.issues[0]?.message).toContain("sentinel");
+  });
+});
+
+function reasoningOf(catalog: ModelCatalog, id: string) {
+  const metadata = catalog.models.find((model) => model.id === id);
+  if (metadata === undefined) throw new Error(`missing model ${id}`);
+  return metadata.reasoning;
+}
+
+describe("resolveAllEfforts", () => {
+  it("reorders listed efforts ascending, including none", () => {
+    const catalog = catalogOf([
+      imageModel("vendor/reasoner", {
+        supported_efforts: ["max", "xhigh", "high", "medium", "low", "none"],
+      }),
+    ]);
+    expect(resolveAllEfforts(reasoningOf(catalog, "vendor/reasoner"))).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  it("appends unknown values in catalog order and deduplicates", () => {
+    const catalog = catalogOf([
+      imageModel("vendor/future", {
+        supported_efforts: ["ultra", "high", "ultra", "low"],
+      }),
+    ]);
+    expect(resolveAllEfforts(reasoningOf(catalog, "vendor/future"))).toEqual([
+      "low",
+      "high",
+      "ultra",
+    ]);
+  });
+
+  it("expands null to the full gateway vocabulary ascending", () => {
+    const catalog = catalogOf([imageModel("vendor/all", { supported_efforts: null })]);
+    expect(resolveAllEfforts(reasoningOf(catalog, "vendor/all"))).toEqual([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  it("falls back to a single default when no effort can be selected", () => {
+    const empty = catalogOf([imageModel("vendor/empty", { supported_efforts: [] })]);
+    expect(resolveAllEfforts(reasoningOf(empty, "vendor/empty"))).toEqual(["default"]);
+
+    // Gemma-shaped metadata: a reasoning object without supported_efforts.
+    const noSelection = catalogOf([imageModel("vendor/gemma", { default_enabled: true })]);
+    expect(resolveAllEfforts(reasoningOf(noSelection, "vendor/gemma"))).toEqual(["default"]);
+
+    const nonReasoning = catalogOf([imageModel("vendor/plain")]);
+    expect(resolveAllEfforts(reasoningOf(nonReasoning, "vendor/plain"))).toEqual(["default"]);
+  });
+
+  it("trims listed values, drops blank entries, and falls back when nothing remains", () => {
+    const messy = catalogOf([
+      imageModel("vendor/messy", { supported_efforts: [" high ", "", "   ", "high"] }),
+    ]);
+    expect(resolveAllEfforts(reasoningOf(messy, "vendor/messy"))).toEqual(["high"]);
+
+    const blank = catalogOf([imageModel("vendor/blank", { supported_efforts: ["", "   "] })]);
+    expect(resolveAllEfforts(reasoningOf(blank, "vendor/blank"))).toEqual(["default"]);
+  });
+
+  it("maps a literal default entry to the baseline evaluation", () => {
+    const catalog = catalogOf([
+      imageModel("vendor/defensive", { supported_efforts: ["default", "high"] }),
+    ]);
+    const efforts = resolveAllEfforts(reasoningOf(catalog, "vendor/defensive"));
+    expect(efforts).toEqual(["default", "high"]);
+
+    const result = preflightPlan(
+      planFor(efforts.map((mode) => ({ alias: "a", id: "vendor/defensive", mode }))),
+      catalog,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.preflight.evaluations[0]?.reasoning).toBeNull();
+    expect(result.preflight.evaluations[1]?.reasoning).toEqual({ effort: "high" });
+  });
+
+  it("resolves none from metadata and preflight rejects it when reasoning is mandatory", () => {
+    const catalog = catalogOf([
+      imageModel("vendor/mandatory", { supported_efforts: ["none", "low"], mandatory: true }),
+    ]);
+    const efforts = resolveAllEfforts(reasoningOf(catalog, "vendor/mandatory"));
+    expect(efforts).toEqual(["none", "low"]);
+
+    const result = preflightPlan(
+      planFor(efforts.map((mode) => ({ alias: "a", id: "vendor/mandatory", mode }))),
+      catalog,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues[0]?.code).toBe("mandatory_reasoning");
+    expect(result.issues[0]?.path).toBe("plan.evaluations[0].reasoningMode");
+  });
+
+  it("carries an unknown resolved effort through preflight as a concrete string", () => {
+    const catalog = catalogOf([
+      imageModel("vendor/future", { supported_efforts: ["low", "ultra"] }),
+    ]);
+    const efforts = resolveAllEfforts(reasoningOf(catalog, "vendor/future"));
+    const result = preflightPlan(
+      planFor(efforts.map((mode) => ({ alias: "a", id: "vendor/future", mode }))),
+      catalog,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.preflight.evaluations[1]?.reasoningMode).toBe("ultra");
+    expect(result.preflight.evaluations[1]?.reasoning).toEqual({ effort: "ultra" });
+  });
 });
 
 describe("decideReasoningRequest", () => {
@@ -260,5 +389,13 @@ describe("decideReasoningRequest", () => {
       ok: true,
       reasoning: null,
     });
+  });
+
+  it("rejects the all sentinel instead of sending it as an effort", () => {
+    const decision = decideReasoningRequest("all", reasoning);
+    expect(decision.ok).toBe(false);
+    if (decision.ok) return;
+    expect(decision.code).toBe("unsupported_reasoning_effort");
+    expect(decision.message).toContain("sentinel");
   });
 });

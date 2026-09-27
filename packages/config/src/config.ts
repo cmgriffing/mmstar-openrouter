@@ -8,7 +8,13 @@
  * belong in configuration and are read from the environment by the runner.
  */
 import type { ValidationIssue } from "./errors";
-import { isReasoningMode, REASONING_MODES, type ReasoningMode } from "./reasoning";
+import {
+  isReasoningMode,
+  REASONING_ALL,
+  REASONING_MODES,
+  type ReasoningMode,
+  type ReasoningModesConfig,
+} from "./reasoning";
 
 export const CONFIG_VERSION = 1;
 
@@ -54,8 +60,12 @@ export interface ProviderRoutingConfig {
 export interface ModelAliasConfig {
   /** Fixed OpenRouter model ID; dynamic router aliases and variant suffixes are rejected. */
   openRouterId: string;
-  /** Ordered, unique reasoning modes; each mode becomes one evaluation. */
-  reasoningModes: ReasoningMode[];
+  /**
+   * Ordered, unique reasoning modes; each mode becomes one evaluation. The
+   * literal `"all"` expands from model capability metadata before the plan is
+   * frozen.
+   */
+  reasoningModes: ReasoningModesConfig;
   /** Group whose shared provider limit serializes all of its evaluations. */
   rateLimitGroup: string;
   provider?: ProviderRoutingConfig;
@@ -310,13 +320,14 @@ function validateReasoningModes(
   value: unknown,
   path: string,
   issues: ValidationIssue[],
-): ReasoningMode[] {
+): ReasoningModesConfig {
+  if (value === REASONING_ALL) return REASONING_ALL;
   if (!Array.isArray(value)) {
     pushIssue(
       issues,
       path,
       "invalid_type",
-      `must be a non-empty array of reasoning modes: ${REASONING_MODES.join(", ")}`,
+      `must be "${REASONING_ALL}" or a non-empty array of reasoning modes: ${REASONING_MODES.join(", ")}`,
     );
     return [];
   }
@@ -325,7 +336,7 @@ function validateReasoningModes(
       issues,
       path,
       "empty_list",
-      `must list at least one reasoning mode: ${REASONING_MODES.join(", ")}`,
+      `must be "${REASONING_ALL}" or list at least one reasoning mode: ${REASONING_MODES.join(", ")}`,
     );
     return [];
   }
@@ -333,6 +344,15 @@ function validateReasoningModes(
   const seen = new Set<string>();
   value.forEach((entry, index) => {
     const entryPath = indexAt(path, index);
+    if (entry === REASONING_ALL) {
+      pushIssue(
+        issues,
+        entryPath,
+        "ambiguous_reasoning_modes",
+        `"${REASONING_ALL}" must be used alone; declare either "${REASONING_ALL}" or an explicit list of modes`,
+      );
+      return;
+    }
     if (!isReasoningMode(entry)) {
       pushIssue(
         issues,
@@ -515,7 +535,8 @@ function validateAlias(
 
   const provider = validateProvider(value.provider, at(path, "provider"), issues);
 
-  if (openRouterId === undefined || rateLimitGroup === undefined || reasoningModes.length === 0) {
+  const invalidModes = reasoningModes !== REASONING_ALL && reasoningModes.length === 0;
+  if (openRouterId === undefined || rateLimitGroup === undefined || invalidModes) {
     return undefined;
   }
   return provider === undefined

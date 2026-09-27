@@ -9,7 +9,6 @@
  * bound.
  */
 import type { CooldownReason, EngineEvent, EngineMetrics } from "@mmstar/benchmark";
-import type { ReasoningMode } from "@mmstar/config";
 import type {
   AttemptState,
   CostRecord,
@@ -41,7 +40,8 @@ export interface EvaluationRow {
   evaluationId: string;
   modelAlias: string;
   openRouterId: string;
-  reasoningMode: ReasoningMode;
+  /** Concrete reasoning mode or resolved effort string. */
+  reasoningMode: string;
   /** Rate-limit group; variants in one group serialize. */
   group: string;
   /** Last upstream provider observed in a response, or null when unknown. */
@@ -94,7 +94,8 @@ export interface DetailAttemptView {
 export interface FixtureDetailView {
   evaluationId: string;
   modelAlias: string;
-  reasoningMode: ReasoningMode;
+  /** Concrete reasoning mode or resolved effort string. */
+  reasoningMode: string;
   fixtureId: string;
   category: string;
   question: string;

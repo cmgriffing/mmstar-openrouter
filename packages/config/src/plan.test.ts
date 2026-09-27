@@ -115,4 +115,73 @@ describe("expandPlan", () => {
       expect(duplicated.issues.map((issue) => issue.code)).toContain("duplicate_fixture");
     }
   });
+
+  it("expands all from a resolved effort list in ascending order", () => {
+    const config = configWithModels({
+      a: { openRouterId: "vendor/a", reasoningModes: "all", rateLimitGroup: "g" },
+    });
+    const resolvedEfforts = new Map([["a", ["none", "low", "medium", "high", "xhigh", "max"]]]);
+    const plan = expandOrThrow({ config, ...baseSource, resolvedEfforts });
+    expect(plan.evaluations.map((evaluation) => evaluation.evaluationId)).toEqual([
+      "a::none",
+      "a::low",
+      "a::medium",
+      "a::high",
+      "a::xhigh",
+      "a::max",
+    ]);
+    expect(plan.evaluations.map((evaluation) => evaluation.reasoningMode)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  it("passes unknown resolved effort strings through as concrete modes", () => {
+    const config = configWithModels({
+      a: { openRouterId: "vendor/a", reasoningModes: "all", rateLimitGroup: "g" },
+    });
+    const plan = expandOrThrow({
+      config,
+      ...baseSource,
+      resolvedEfforts: new Map([["a", ["low", "ultra"]]]),
+    });
+    expect(plan.evaluations.map((evaluation) => evaluation.evaluationId)).toEqual([
+      "a::low",
+      "a::ultra",
+    ]);
+  });
+
+  it("fails closed when all has no resolved effort list", () => {
+    const config = configWithModels({
+      a: { openRouterId: "vendor/a", reasoningModes: "all", rateLimitGroup: "g" },
+    });
+    const result = expandPlan({ config, ...baseSource });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toEqual(["all_requires_metadata"]);
+      expect(result.issues[0]?.path).toBe("sets.demo.models[0]");
+      expect(result.issues[0]?.message).toContain('"a"');
+    }
+  });
+
+  it("detects duplicates across aliases resolved from all", () => {
+    const config = configWithModels({
+      a: { openRouterId: "vendor/same", reasoningModes: "all", rateLimitGroup: "g" },
+      b: { openRouterId: "vendor/same", reasoningModes: "all", rateLimitGroup: "g" },
+    });
+    const resolvedEfforts = new Map([
+      ["a", ["low"]],
+      ["b", ["low"]],
+    ]);
+    const result = expandPlan({ config, ...baseSource, resolvedEfforts });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toEqual(["duplicate_evaluation"]);
+      expect(result.issues[0]?.message).toContain("vendor/same");
+    }
+  });
 });

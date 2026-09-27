@@ -14,6 +14,7 @@ import type { ProviderResult } from "./provider-failure";
 import type { PreflightEvaluation } from "./provider-preflight";
 import type { ChatCompletionRequestPayload } from "./provider-request";
 import type { NormalizedCompletion } from "./provider-response";
+import { RATE_LIMIT_HALT_THRESHOLD_MS } from "./retry-policy";
 
 const T0 = Date.parse("2026-09-23T00:00:00.000Z");
 
@@ -763,6 +764,247 @@ describe("BenchmarkEngine retries and outcomes", () => {
     // Retry backoff (625ms) plus both request latencies.
     expect(outcome?.totalFixtureTimeMs).toBeGreaterThanOrEqual(625 + 200);
     expect(outcome?.attemptCount).toBe(2);
+  });
+});
+
+describe("BenchmarkEngine rate-limit escalation and halt", () => {
+  function rateLimitCooldowns(
+    events: readonly EngineEvent[],
+  ): Extract<EngineEvent, { type: "group.cooldown.started" }>[] {
+    return events.filter(
+      (event): event is Extract<EngineEvent, { type: "group.cooldown.started" }> =>
+        event.type === "group.cooldown.started" && event.reason === "rate_limit",
+    );
+  }
+
+  function cooldownDurations(events: readonly EngineEvent[]): number[] {
+    return rateLimitCooldowns(events).map(
+      (event) => Date.parse(event.until) - Date.parse(event.at),
+    );
+  }
+
+  it("escalates the group cooldown across consecutive 429s", async () => {
+    let failures = 0;
+    const h = harness({
+      evaluations: [evaluation("a", "shared")],
+      fixtures: [fixture("0")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 4 },
+      random: () => 0,
+      respond: () => {
+        if (failures < 3) {
+          failures += 1;
+          return fail("rate_limit", { httpStatus: 429 });
+        }
+        return ok("A");
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("completed");
+    expect(h.calls).toHaveLength(4);
+    // 1s · 2^(strikes-1) beats the 250ms jitter floor on every retry.
+    expect(cooldownDurations(h.events)).toEqual([1000, 2000, 4000]);
+    const gaps = h.calls
+      .slice(1)
+      .map((call, index) => call.startedAt - (h.calls[index]?.finishedAt ?? 0));
+    expect(gaps).toEqual([1000, 2000, 4000]);
+    expect(outcomeFor(result, "a::default", "0")?.kind).toBe("correct");
+  });
+
+  it("resets the strike count after a successful request in the group", async () => {
+    const steps = ["fail", "ok", "fail", "ok"] as const;
+    let index = 0;
+    const h = harness({
+      evaluations: [evaluation("a", "shared")],
+      fixtures: [fixture("0"), fixture("1")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 3 },
+      random: () => 0,
+      respond: () => {
+        const step = steps[index] ?? "ok";
+        index += 1;
+        return step === "fail" ? fail("rate_limit", { httpStatus: 429 }) : ok("A");
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("completed");
+    // Without the reset the second throttled fixture would wait 2s, not 1s.
+    expect(cooldownDurations(h.events)).toEqual([1000, 1000]);
+    expect(h.calls).toHaveLength(4);
+  });
+
+  it("does not penalize an independent group", async () => {
+    const h = harness({
+      evaluations: [evaluation("a", "ga"), evaluation("b", "gb")],
+      fixtures: [fixture("0")],
+      execution: { maxConcurrentGroups: 2, maxRetries: 3 },
+      random: () => 0,
+      respond: (call) => {
+        if (groupOf(call.payload.model) === "a") {
+          const aCalls = h.calls.filter((entry) => groupOf(entry.payload.model) === "a").length;
+          if (aCalls <= 2) return fail("rate_limit", { httpStatus: 429 });
+        }
+        return ok("A");
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("completed");
+    expect([...new Set(rateLimitCooldowns(h.events).map((event) => event.group))]).toEqual(["ga"]);
+    const bCall = h.calls.find((call) => groupOf(call.payload.model) === "b");
+    const aRetry = h.calls.filter((call) => groupOf(call.payload.model) === "a")[1];
+    expect(bCall?.finishedAt ?? 0).toBeLessThanOrEqual(aRetry?.startedAt ?? 0);
+  });
+
+  it("holds other fixtures in the group behind an escalated cooldown", async () => {
+    let failures = 0;
+    const h = harness({
+      evaluations: [evaluation("a", "shared")],
+      fixtures: [fixture("0"), fixture("1")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 3 },
+      random: () => 0,
+      respond: () => {
+        if (failures < 2) {
+          failures += 1;
+          return fail("rate_limit", { httpStatus: 429 });
+        }
+        return ok("A");
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("completed");
+    // Calls: fixture 0 fails twice, then succeeds, then fixture 1 runs.
+    expect(h.calls).toHaveLength(4);
+    expect(cooldownDurations(h.events)).toEqual([1000, 2000]);
+    const secondFailureFinish = h.calls[1]?.finishedAt ?? 0;
+    const queuedFixtureStart = h.calls[3]?.startedAt ?? 0;
+    // The queued fixture could not start until the escalated cooldown elapsed.
+    expect(queuedFixtureStart - secondFailureFinish).toBe(2000);
+    expect(outcomeFor(result, "a::default", "0")?.kind).toBe("correct");
+    expect(outcomeFor(result, "a::default", "1")?.kind).toBe("correct");
+  });
+
+  it("lets an in-flight request in another group settle before halting", async () => {
+    const h = harness({
+      evaluations: [evaluation("a", "ga"), evaluation("b", "gb")],
+      fixtures: [fixture("0")],
+      execution: { maxConcurrentGroups: 2, maxRetries: 3 },
+      latencyMs: 5000,
+      respond: (call) =>
+        groupOf(call.payload.model) === "a"
+          ? fail("rate_limit", { httpStatus: 429, retryAfterMs: 600_000 })
+          : ok("A"),
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("failed");
+    expect(result.halt?.category).toBe("rate_limit");
+    expect(h.calls.map((call) => call.payload.model)).toEqual(["vendor/a", "vendor/b"]);
+    // The halting group's fixture stays pending; the other group's request was
+    // allowed to finish and settle rather than being cancelled by the halt.
+    expect(outcomeFor(result, "a::default", "0")?.state).toBe("pending");
+    expect(outcomeFor(result, "b::default", "0")?.state).toBe("settled");
+    const bAttempt = result.evaluations.find((entry) => entry.evaluationId === "b::default")
+      ?.attempts[0];
+    expect(bAttempt?.state).toBe("completed");
+    expect(bAttempt?.finishedAt).toBe("2026-09-23T00:00:05.000Z");
+  });
+
+  it("halts instead of sleeping when the effective cooldown exceeds the threshold", async () => {
+    const h = harness({
+      evaluations: [evaluation("a", "g1")],
+      fixtures: [fixture("0"), fixture("1")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 3 },
+      respond: () => fail("rate_limit", { httpStatus: 429, retryAfterMs: 600_000 }),
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("failed");
+    expect(h.calls).toHaveLength(1);
+    expect(result.halt?.category).toBe("rate_limit");
+    expect(result.halt?.message).toContain("resume after the reset");
+    // The message names the reset time so an operator can resume deliberately.
+    expect(result.halt?.message).toContain("2026-09-23T00:10:00.000Z");
+    // Never-attempted work stays pending so a resume can reissue it losslessly.
+    expect(outcomeFor(result, "a::default", "0")).toMatchObject({
+      state: "pending",
+      attemptCount: 0,
+    });
+    expect(outcomeFor(result, "a::default", "1")).toMatchObject({
+      state: "pending",
+      attemptCount: 0,
+    });
+    expect(result.evaluations[0]?.attempts).toHaveLength(1);
+    expect(result.evaluations[0]?.attempts[0]?.failure?.category).toBe("rate_limit");
+    expect(
+      h.events.some((event) => event.type === "engine.stopping" && event.reason === "error"),
+    ).toBe(true);
+  });
+
+  it("waits and retries at exactly the halt threshold", async () => {
+    let failed = false;
+    const h = harness({
+      evaluations: [evaluation("a", "g1")],
+      fixtures: [fixture("0")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 1 },
+      respond: () => {
+        if (!failed) {
+          failed = true;
+          return fail("rate_limit", {
+            httpStatus: 429,
+            retryAfterMs: RATE_LIMIT_HALT_THRESHOLD_MS,
+          });
+        }
+        return ok("A");
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.state).toBe("completed");
+    expect(h.calls).toHaveLength(2);
+    expect((h.calls[1]?.startedAt ?? 0) - (h.calls[0]?.finishedAt ?? 0)).toBe(
+      RATE_LIMIT_HALT_THRESHOLD_MS,
+    );
+  });
+
+  it("retries a transient 402 in-flight budget but halts on a credit 402", async () => {
+    let budgetFailures = 0;
+    const retrying = harness({
+      evaluations: [evaluation("a", "g1")],
+      fixtures: [fixture("0")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 2 },
+      respond: () => {
+        if (budgetFailures === 0) {
+          budgetFailures += 1;
+          return fail("rate_limit", { httpStatus: 402, retryAfterMs: 1000 });
+        }
+        return ok("A");
+      },
+    });
+
+    const retried = await retrying.run();
+    expect(retried.state).toBe("completed");
+    expect(retrying.calls).toHaveLength(2);
+
+    const halting = harness({
+      evaluations: [evaluation("a", "g1")],
+      fixtures: [fixture("0")],
+      execution: { maxConcurrentGroups: 1, maxRetries: 2 },
+      respond: () => fail("configuration", { httpStatus: 402, message: "Insufficient credits" }),
+    });
+
+    const halted = await halting.run();
+    expect(halted.state).toBe("failed");
+    expect(halted.halt?.category).toBe("configuration");
+    expect(halting.calls).toHaveLength(1);
   });
 });
 

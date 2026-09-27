@@ -71,6 +71,34 @@ export function failureCategoryForStatus(status: number): FailureCategory {
 }
 
 /**
+ * `error.metadata.limit_source` value OpenRouter uses for a transient in-flight
+ * spending-budget 402. Every other 402 (credit exhaustion, key limit,
+ * `weight_exceeds_budget`) stays a terminal `configuration` failure.
+ */
+export const IN_FLIGHT_BUDGET_LIMIT_SOURCE = "openrouter_in_flight_budget";
+
+/** Read `error.metadata.limit_source` from a parsed error object, or null. */
+export function limitSourceOf(error: unknown): string | null {
+  if (!isJsonObject(error)) return null;
+  const metadata = error.metadata;
+  if (!isJsonObject(metadata)) return null;
+  const source = metadata.limit_source;
+  return typeof source === "string" ? source : null;
+}
+
+/**
+ * Classify a status with its parsed error body. A 402 in-flight budget is a
+ * retryable `rate_limit`; every other status delegates to
+ * `failureCategoryForStatus`.
+ */
+export function failureCategoryForStatusWithError(status: number, error: unknown): FailureCategory {
+  if (status === 402 && limitSourceOf(error) === IN_FLIGHT_BUDGET_LIMIT_SOURCE) {
+    return "rate_limit";
+  }
+  return failureCategoryForStatus(status);
+}
+
+/**
  * True when a classified failure is transient under the documented policy:
  * timeouts, network failures, 429, and selected 5xx. Authentication,
  * configuration, invalid-request, content-filter, cancelled, and unknown
@@ -125,6 +153,33 @@ export function parseRetryAfterMs(value: string | undefined, now: number): numbe
   return Math.max(0, date - now);
 }
 
+/**
+ * Parse an `X-RateLimit-Reset` header into a delay in milliseconds. OpenRouter
+ * sends epoch milliseconds; a non-numeric value or a time that is not in the
+ * future (including epoch seconds mistaken for milliseconds) contributes no
+ * delay, so the ladder falls through to exponential backoff rather than
+ * sleeping for an absurd interval.
+ */
+export function parseRateLimitResetMs(value: string | undefined, now: number): number | null {
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) return null;
+  const reset = Number(trimmed);
+  if (!Number.isSafeInteger(reset) || reset <= now) return null;
+  return reset - now;
+}
+
+/** Retry signals carried by a response's rate-limit headers. */
+export function parseRetrySignals(
+  headers: Readonly<Record<string, string>> | undefined,
+  now: number,
+): Pick<FailureRecord, "retryAfterMs" | "rateLimitResetMs"> {
+  return {
+    retryAfterMs: parseRetryAfterMs(readHeader(headers, "retry-after"), now),
+    rateLimitResetMs: parseRateLimitResetMs(readHeader(headers, "x-ratelimit-reset"), now),
+  };
+}
+
 export interface ClassifyHttpFailureInput {
   status: number;
   bodyText: string;
@@ -134,12 +189,13 @@ export interface ClassifyHttpFailureInput {
 }
 
 export function classifyHttpFailure(input: ClassifyHttpFailureInput): FailureRecord {
-  const category = failureCategoryForStatus(input.status);
+  const parsed = tryParseJson(input.bodyText);
+  const error = isJsonObject(parsed) ? parsed.error : undefined;
   return {
-    category,
+    category: failureCategoryForStatusWithError(input.status, error),
     message: extractProviderErrorMessage(input.bodyText, input.status),
     httpStatus: input.status,
-    retryAfterMs: parseRetryAfterMs(readHeader(input.headers, "retry-after"), input.now),
+    ...parseRetrySignals(input.headers, input.now),
   };
 }
 

@@ -123,6 +123,48 @@ describe("parseMmstarConfig", () => {
     );
   });
 
+  it("accepts reasoningModes all and rejects mixing it with explicit modes", () => {
+    const all = parseOrThrow({
+      version: 1,
+      models: { a: { openRouterId: "vendor/a", reasoningModes: "all", rateLimitGroup: "g" } },
+      sets: { s: { models: ["a"] } },
+    });
+    expect(all.models.a?.reasoningModes).toBe("all");
+
+    const mixed = issueKeys({
+      version: 1,
+      models: {
+        a: { openRouterId: "vendor/a", reasoningModes: ["all", "high"], rateLimitGroup: "g" },
+      },
+      sets: { s: { models: ["a"] } },
+    });
+    expect(mixed).toContain("models.a.reasoningModes[0]:ambiguous_reasoning_modes");
+  });
+
+  it("keeps explicit mode arrays validating and ordered as before", () => {
+    const config = parseOrThrow({
+      version: 1,
+      models: {
+        a: {
+          openRouterId: "vendor/a",
+          reasoningModes: ["default", "high", "none"],
+          rateLimitGroup: "g",
+        },
+      },
+      sets: { s: { models: ["a"] } },
+    });
+    expect(config.models.a?.reasoningModes).toEqual(["default", "high", "none"]);
+  });
+
+  it("rejects non-array, non-all reasoning mode forms with an actionable message", () => {
+    const keys = issueKeys({
+      version: 1,
+      models: { a: { openRouterId: "vendor/a", reasoningModes: 3, rateLimitGroup: "g" } },
+      sets: { s: { models: ["a"] } },
+    });
+    expect(keys).toContain("models.a.reasoningModes:invalid_type");
+  });
+
   it("rejects dynamic routers and malformed model IDs", () => {
     const base = (openRouterId: string): Record<string, unknown> => ({
       version: 1,
