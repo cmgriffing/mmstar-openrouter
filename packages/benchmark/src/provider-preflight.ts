@@ -10,15 +10,25 @@
  * `default` always omits the upstream `reasoning` parameter, while `none`
  * requests disabled reasoning and is rejected when reasoning is mandatory.
  */
-import type {
-  EvaluationPlan,
-  ProviderRoutingConfig,
-  ReasoningMode,
-  ValidationIssue,
-} from "@mmstar/config";
+
+import type { EvaluationPlan, ProviderRoutingConfig, ValidationIssue } from "@mmstar/config";
+import { REASONING_ALL, REASONING_MODES } from "@mmstar/config";
 import type { ModelCapabilitySnapshot } from "@mmstar/results";
 import type { ModelCatalog, ModelReasoningMetadata } from "./provider-metadata";
 import { toCapabilitySnapshot } from "./provider-metadata";
+
+/**
+ * Ascending intensity order used when expanding `reasoningModes: "all"`.
+ * `default` ranks first because it omits the reasoning parameter entirely; the
+ * remaining modes follow increasing effort. Values outside this vocabulary are
+ * unknown to the runner and are appended in catalog order.
+ */
+const EFFORT_RESOLUTION_ORDER: readonly string[] = REASONING_MODES;
+
+/** Full gateway vocabulary used when metadata accepts every effort (`null`). */
+const FULL_GATEWAY_EFFORTS: readonly string[] = EFFORT_RESOLUTION_ORDER.filter(
+  (mode) => mode !== "default",
+);
 
 /** The upstream `reasoning` payload for one evaluation, or null to omit it. */
 export type ReasoningRequest = { effort: string } | null;
@@ -32,7 +42,8 @@ export interface PreflightEvaluation {
   evaluationId: string;
   modelAlias: string;
   openRouterId: string;
-  reasoningMode: ReasoningMode;
+  /** Concrete reasoning mode or resolved effort string; never the `"all"` sentinel. */
+  reasoningMode: string;
   rateLimitGroup: string;
   provider: ProviderRoutingConfig | null;
   reasoning: ReasoningRequest;
@@ -54,9 +65,16 @@ export type ReasoningDecision =
 
 /** Decide whether one configured mode may be requested, and how. */
 export function decideReasoningRequest(
-  mode: ReasoningMode,
+  mode: string,
   reasoning: ModelReasoningMetadata,
 ): ReasoningDecision {
+  if (mode === REASONING_ALL) {
+    return {
+      ok: false,
+      code: "unsupported_reasoning_effort",
+      message: `"${REASONING_ALL}" is a configuration sentinel, not an effort; resolve it from capability metadata before building the plan`,
+    };
+  }
   if (mode === "default") return { ok: true, reasoning: null };
 
   if (mode === "none") {
@@ -103,6 +121,45 @@ export function decideReasoningRequest(
   }
 
   return { ok: true, reasoning: { effort: mode } };
+}
+
+/**
+ * Expand `reasoningModes: "all"` against model capability metadata.
+ *
+ * - `null` means every gateway effort is accepted, so the full vocabulary is
+ *   returned in ascending intensity order.
+ * - A list is reordered into ascending intensity; values are trimmed, blank
+ *   entries are dropped, and values the runner does not know are appended in
+ *   catalog order, because the wire contract carries effort as a string and an
+ *   upstream vocabulary addition must not break a run.
+ * - An empty list, `no-effort-selection`, or `non-reasoning` exposes no
+ *   selectable efforts, so a single `default` evaluation is returned.
+ *
+ * The result is deduplicated and never empty. A literal `"default"` in the
+ * metadata maps to the baseline evaluation (the reasoning parameter is omitted)
+ * through `decideReasoningRequest`.
+ */
+export function resolveAllEfforts(reasoning: ModelReasoningMetadata): string[] {
+  const supported = reasoning.supportedEfforts;
+  if (supported === null) return [...FULL_GATEWAY_EFFORTS];
+  if (supported === "non-reasoning" || supported === "no-effort-selection") return ["default"];
+
+  const rank = new Map(EFFORT_RESOLUTION_ORDER.map((mode, index) => [mode, index]));
+  const known: string[] = [];
+  const unknown: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of supported) {
+    // Trim and drop blanks: a metadata list of `["", "  "]` must not produce an
+    // empty `effort` request or an `<alias>::` evaluation ID.
+    const effort = raw.trim();
+    if (effort === "" || seen.has(effort)) continue;
+    seen.add(effort);
+    if (rank.has(effort)) known.push(effort);
+    else unknown.push(effort);
+  }
+  if (known.length === 0 && unknown.length === 0) return ["default"];
+  known.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
+  return [...known, ...unknown];
 }
 
 /**

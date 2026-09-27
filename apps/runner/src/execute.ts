@@ -18,11 +18,14 @@ import {
   type EngineFixture,
   type EngineRunResult,
   type FixtureRecord,
+  type ModelCatalog,
+  type ModelReasoningMetadata,
   OpenRouterClient,
   PROMPT_VERSION,
   type PreflightEvaluation,
   parseDatasetTsv,
   preflightPlan,
+  resolveAllEfforts,
   toPromptFixture,
 } from "@mmstar/benchmark";
 import {
@@ -30,6 +33,7 @@ import {
   type MmstarConfig,
   type PlanEvaluation,
   parseMmstarConfigJson,
+  REASONING_ALL,
   sha256Hex,
   ValidationError,
   type ValidationIssue,
@@ -227,7 +231,26 @@ async function runFresh(set: string, context: RunContext, store: RunStore): Prom
   const config = loadConfig(context);
   const datasetPath = resolvePath(context.cwd, config.dataset.path);
   const dataset = await loadDataset(datasetPath, context.signal);
-  const plan = buildPlan(config, set, dataset.fixtureIds, dataset.sha256);
+
+  // An unknown set is a config error, not a provider problem: let `expandPlan`
+  // report the available sets before any network access.
+  if (config.sets[set] === undefined) {
+    buildPlan(config, set, dataset.fixtureIds, dataset.sha256);
+  }
+
+  // `all` expands from capability metadata, so the catalog is fetched (or
+  // assumed under --skip-preflight) before the plan is frozen. No run directory
+  // is created until expansion and capability preflight both succeed.
+  const catalog = context.skipPreflight ? null : await fetchCatalog(context);
+  const resolvedEfforts = resolveAllEffortsForAliases(
+    config,
+    aliasesForSets(config, [set]),
+    catalog,
+  );
+  const plan = buildPlan(config, set, dataset.fixtureIds, dataset.sha256, resolvedEfforts);
+  const capabilities =
+    catalog === null ? assumeCapabilities(plan, context) : preflightCapabilities(plan, catalog);
+
   const runId = store.nextRunId(nowMs(context), nextSuffix(context));
   const timestamp = nowIso(context);
 
@@ -244,7 +267,7 @@ async function runFresh(set: string, context: RunContext, store: RunStore): Prom
       execution: config.execution,
     },
     plan,
-    capabilities: await resolveCapabilities(plan, context),
+    capabilities,
     lifecycle: { state: "initialized", updatedAt: timestamp },
   };
 
@@ -809,6 +832,7 @@ function buildPlan(
   set: string,
   fixtureIds: readonly string[],
   datasetSha256: string,
+  resolvedEfforts?: ReadonlyMap<string, readonly string[]>,
 ): RunManifest["plan"] {
   const result = expandPlan({
     config,
@@ -818,9 +842,68 @@ function buildPlan(
     configSha256: null,
     promptVersion: PROMPT_VERSION,
     scorerVersion: SCORER_VERSION,
+    ...(resolvedEfforts === undefined ? {} : { resolvedEfforts }),
   });
   if (!result.ok) throw new ValidationError(`set ${set}`, result.issues);
   return result.plan;
+}
+
+/**
+ * Alias names referenced by any of the selected sets, in set order and without
+ * duplicates. Aliases outside the selection never need `all` resolution.
+ */
+export function aliasesForSets(config: MmstarConfig, sets: readonly string[]): string[] {
+  const names: string[] = [];
+  for (const setName of sets) {
+    for (const alias of config.sets[setName]?.models ?? []) {
+      if (!names.includes(alias)) names.push(alias);
+    }
+  }
+  return names;
+}
+
+/**
+ * Capability metadata assumed under `--skip-preflight`: every effort is
+ * accepted, matching the `supportedEfforts: null` snapshot `assumeCapabilities`
+ * freezes.
+ */
+const ASSUMED_REASONING_METADATA: ModelReasoningMetadata = {
+  supportedEfforts: null,
+  defaultEffort: null,
+  defaultEnabled: null,
+  supportsMaxTokens: false,
+  mandatory: false,
+};
+
+/**
+ * Effort lists for aliases configured with `reasoningModes: "all"`.
+ *
+ * With a live catalog, each `all` alias resolves from its model's reasoning
+ * metadata. A model missing from the catalog resolves to a `default`
+ * placeholder so preflight reports `unknown_model` with the offending ID
+ * instead of a generic resolution failure. With `catalog === null`
+ * (`--skip-preflight`) resolution uses assumed capabilities.
+ */
+export function resolveAllEffortsForAliases(
+  config: MmstarConfig,
+  aliasNames: readonly string[],
+  catalog: ModelCatalog | null,
+): Map<string, readonly string[]> {
+  const resolution = new Map<string, readonly string[]>();
+  for (const aliasName of aliasNames) {
+    const alias = config.models[aliasName];
+    if (alias === undefined || alias.reasoningModes !== REASONING_ALL) continue;
+    if (catalog === null) {
+      resolution.set(aliasName, resolveAllEfforts(ASSUMED_REASONING_METADATA));
+      continue;
+    }
+    const metadata = catalog.models.find((model) => model.id === alias.openRouterId);
+    resolution.set(
+      aliasName,
+      metadata === undefined ? ["default"] : resolveAllEfforts(metadata.reasoning),
+    );
+  }
+  return resolution;
 }
 
 function verifyModelsAvailable(source: RunManifest, config: MmstarConfig): void {
@@ -842,7 +925,16 @@ function verifyModelsAvailable(source: RunManifest, config: MmstarConfig): void 
         message: `model ID changed from "${evaluation.openRouterId}" to "${alias.openRouterId}"; a frozen plan cannot be re-targeted`,
       });
     }
-    if (!alias.reasoningModes.includes(evaluation.reasoningMode)) {
+    const modeDeclared =
+      alias.reasoningModes === REASONING_ALL ||
+      alias.reasoningModes.some((mode) => mode === evaluation.reasoningMode);
+    if (evaluation.reasoningMode === REASONING_ALL) {
+      issues.push({
+        path: `plan.evaluations[${index}].reasoningMode`,
+        code: "unresolved_reasoning_all",
+        message: `frozen plan evaluation "${evaluation.evaluationId}" carries unresolved mode "all"; manifests must contain only concrete evaluations`,
+      });
+    } else if (!modeDeclared) {
       issues.push({
         path: `models.${evaluation.modelAlias}.reasoningModes`,
         code: "frozen_setting_changed",
@@ -872,6 +964,14 @@ export function preflightEvaluations(manifest: RunManifest): PreflightEvaluation
   const snapshots = new Map(manifest.capabilities.map((snapshot) => [snapshot.modelId, snapshot]));
 
   for (const [index, evaluation] of manifest.plan.evaluations.entries()) {
+    if (evaluation.reasoningMode === REASONING_ALL) {
+      issues.push({
+        path: `plan.evaluations[${index}].reasoningMode`,
+        code: "unresolved_reasoning_all",
+        message: `frozen plan evaluation "${evaluation.evaluationId}" carries unresolved mode "all"; resume from a plan that froze concrete evaluations`,
+      });
+      continue;
+    }
     const snapshot = snapshots.get(evaluation.openRouterId);
     if (snapshot === undefined) {
       issues.push({
@@ -940,17 +1040,7 @@ function reasoningRequest(
   return { effort: String(mode) };
 }
 
-async function resolveCapabilities(
-  plan: RunManifest["plan"],
-  context: RunContext,
-): Promise<ModelCapabilitySnapshot[]> {
-  if (context.skipPreflight) {
-    context.stderr.write(
-      "mmstar: warning: --skip-preflight freezes assumed capabilities with no live check; these results are development evidence, not verified capability evidence\n",
-    );
-    return assumeCapabilities(plan);
-  }
-
+async function fetchCatalog(context: RunContext): Promise<ModelCatalog> {
   throwIfAborted(context.signal);
   const client = new OpenRouterClient({ transport: fetchTransport, apiKey: context.apiKey });
   const catalog = await raceWithAbort(
@@ -959,12 +1049,25 @@ async function resolveCapabilities(
   );
   throwIfAborted(context.signal);
   if (!catalog.ok) throw new ProviderHaltError(catalog.failure);
-  const result = preflightPlan(plan, catalog.value);
+  return catalog.value;
+}
+
+function preflightCapabilities(
+  plan: RunManifest["plan"],
+  catalog: ModelCatalog,
+): ModelCapabilitySnapshot[] {
+  const result = preflightPlan(plan, catalog);
   if (!result.ok) throw new ValidationError("capability preflight", result.issues);
   return result.preflight.capabilities;
 }
 
-function assumeCapabilities(plan: RunManifest["plan"]): ModelCapabilitySnapshot[] {
+function assumeCapabilities(
+  plan: RunManifest["plan"],
+  context: RunContext,
+): ModelCapabilitySnapshot[] {
+  context.stderr.write(
+    "mmstar: warning: --skip-preflight freezes assumed capabilities with no live check; these results are development evidence, not verified capability evidence\n",
+  );
   const snapshots: ModelCapabilitySnapshot[] = [];
   for (const evaluation of plan.evaluations) {
     if (snapshots.some((snapshot) => snapshot.modelId === evaluation.openRouterId)) continue;

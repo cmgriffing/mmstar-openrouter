@@ -6,12 +6,7 @@
  * Every persisted file carries an explicit `*Version`, and every record has a
  * unique ID so lineage resolution never overwrites completed source data.
  */
-import type {
-  EvaluationPlan,
-  ExecutionConfig,
-  ProviderRoutingConfig,
-  ReasoningMode,
-} from "@mmstar/config";
+import type { EvaluationPlan, ExecutionConfig, ProviderRoutingConfig } from "@mmstar/config";
 
 /** `manifest.json` schema version. */
 export const RUN_MANIFEST_VERSION = 1;
@@ -109,6 +104,12 @@ export interface FailureRecord {
   httpStatus: number | null;
   /** Server-requested delay in milliseconds when supplied, else null. */
   retryAfterMs: number | null;
+  /**
+   * Delay until the server-reported rate-limit reset in milliseconds, or
+   * null/absent when the response supplied no future `X-RateLimit-Reset`.
+   * Optional so records written before the field existed remain valid.
+   */
+  rateLimitResetMs?: number | null;
 }
 
 export interface AttemptRecord {
@@ -174,7 +175,8 @@ export interface OutcomeRecord {
 
 export interface EvaluationRecord {
   evaluationId: string;
-  reasoningMode: ReasoningMode;
+  /** Concrete reasoning mode or resolved effort string; never the `"all"` sentinel. */
+  reasoningMode: string;
   provider: ProviderRoutingConfig | null;
   rateLimitGroup: string;
   outcomes: OutcomeRecord[];

@@ -118,6 +118,7 @@ describe("normalizeChatCompletion", () => {
         message: "Rate limit exceeded",
         httpStatus: 429,
         retryAfterMs: 5000,
+        rateLimitResetMs: null,
       },
       rawResponse: { error: { code: 429, message: "Rate limit exceeded" } },
     });
@@ -178,5 +179,110 @@ describe("normalizeChatCompletion", () => {
     const stringError = normalize({ error: "upstream unavailable" });
     expect(stringError.ok).toBe(false);
     if (!stringError.ok) expect(stringError.failure.message).toBe("upstream unavailable");
+  });
+
+  it("parses X-RateLimit-Reset as epoch milliseconds and rejects stale or malformed values", () => {
+    const future = normalize({ error: { message: "slow down" } }, 429, {
+      "x-ratelimit-reset": String(NOW + 90_000),
+    });
+    if (!future.ok) {
+      expect(future.failure.retryAfterMs).toBeNull();
+      expect(future.failure.rateLimitResetMs).toBe(90_000);
+    }
+
+    const past = normalize({ error: { message: "slow down" } }, 429, {
+      "x-ratelimit-reset": String(NOW - 1),
+    });
+    if (!past.ok) expect(past.failure.rateLimitResetMs).toBeNull();
+
+    // Epoch seconds mistaken for milliseconds lands in the past: no delay.
+    const seconds = normalize({ error: { message: "slow down" } }, 429, {
+      "x-ratelimit-reset": String(Math.floor((NOW + 90_000) / 1000)),
+    });
+    if (!seconds.ok) expect(seconds.failure.rateLimitResetMs).toBeNull();
+
+    const malformed = normalize({ error: { message: "slow down" } }, 429, {
+      "x-ratelimit-reset": "soon",
+    });
+    if (!malformed.ok) expect(malformed.failure.rateLimitResetMs).toBeNull();
+
+    const both = normalize({ error: { message: "slow down" } }, 429, {
+      "retry-after": "5",
+      "x-ratelimit-reset": String(NOW + 90_000),
+    });
+    if (!both.ok) {
+      expect(both.failure.retryAfterMs).toBe(5000);
+      expect(both.failure.rateLimitResetMs).toBe(90_000);
+    }
+  });
+
+  it("keeps retry signals on the embedded-error path", () => {
+    const result = normalize({ error: { code: 429, message: "slow down" } }, 200, {
+      "retry-after": "5",
+      "x-ratelimit-reset": String(NOW + 90_000),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.category).toBe("rate_limit");
+      expect(result.failure.retryAfterMs).toBe(5000);
+      expect(result.failure.rateLimitResetMs).toBe(90_000);
+      expect(isRetryableFailure(result.failure)).toBe(true);
+    }
+  });
+
+  it("treats an in-flight budget 402 as retryable and other 402s as terminal", () => {
+    const inFlight = normalize(
+      {
+        error: {
+          code: 402,
+          message: "in-flight spending budget exceeded",
+          metadata: { limit_source: "openrouter_in_flight_budget" },
+        },
+      },
+      402,
+      { "retry-after": "30" },
+    );
+    expect(inFlight.ok).toBe(false);
+    if (!inFlight.ok) {
+      expect(inFlight.failure.category).toBe("rate_limit");
+      expect(inFlight.failure.retryAfterMs).toBe(30_000);
+      expect(isRetryableFailure(inFlight.failure)).toBe(true);
+    }
+
+    const embedded = normalize({
+      error: {
+        code: 402,
+        message: "in-flight spending budget exceeded",
+        metadata: { limit_source: "openrouter_in_flight_budget" },
+      },
+    });
+    if (!embedded.ok) {
+      expect(embedded.failure.category).toBe("rate_limit");
+      expect(isRetryableFailure(embedded.failure)).toBe(true);
+    }
+
+    const credits = normalize({ error: { code: 402, message: "Insufficient credits" } }, 402);
+    if (!credits.ok) {
+      expect(credits.failure.category).toBe("configuration");
+      expect(isRetryableFailure(credits.failure)).toBe(false);
+    }
+
+    const keyLimit = normalize(
+      { error: { code: 402, message: "key limit", metadata: { limit_source: "key_limit" } } },
+      402,
+    );
+    if (!keyLimit.ok) expect(keyLimit.failure.category).toBe("configuration");
+
+    const weight = normalize(
+      {
+        error: {
+          code: 402,
+          message: "weight",
+          metadata: { limit_source: "weight_exceeds_budget" },
+        },
+      },
+      402,
+    );
+    if (!weight.ok) expect(weight.failure.category).toBe("configuration");
   });
 });

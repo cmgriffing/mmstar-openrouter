@@ -119,11 +119,22 @@ export function buildConfigJsonSchema(): Record<string, unknown> {
               'Fixed OpenRouter model ID, optionally suffixed with :free, such as "vendor/model".',
           },
           reasoningModes: {
-            type: "array",
-            minItems: 1,
-            uniqueItems: true,
-            items: { enum: [...REASONING_MODES] },
-            description: "Ordered reasoning modes; each mode becomes one evaluation.",
+            oneOf: [
+              {
+                const: "all",
+                description:
+                  "Expand every effort the model capability metadata supports, resolved from the catalog before the plan is frozen.",
+              },
+              {
+                type: "array",
+                minItems: 1,
+                uniqueItems: true,
+                items: { enum: [...REASONING_MODES] },
+                description: "Ordered reasoning modes; each mode becomes one evaluation.",
+              },
+            ],
+            description:
+              'Either "all" or an ordered list of explicit reasoning modes; "all" must not be mixed with explicit modes.',
           },
           rateLimitGroup: {
             type: "string",

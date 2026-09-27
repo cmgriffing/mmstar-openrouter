@@ -6,9 +6,8 @@
  * prompt/scorer versions needed to reproduce it. Expansion is pure: identical
  * inputs produce byte-identical plans.
  */
-import type { MmstarConfig, ProviderRoutingConfig } from "./config";
+import type { MmstarConfig, ModelAliasConfig, ProviderRoutingConfig } from "./config";
 import type { ValidationIssue } from "./errors";
-import type { ReasoningMode } from "./reasoning";
 
 export const PLAN_VERSION = 1;
 
@@ -17,7 +16,11 @@ export interface PlanEvaluation {
   evaluationId: string;
   modelAlias: string;
   openRouterId: string;
-  reasoningMode: ReasoningMode;
+  /**
+   * Concrete reasoning mode or resolved effort string. Plans never store the
+   * `"all"` sentinel: it is expanded from capability metadata before freezing.
+   */
+  reasoningMode: string;
   rateLimitGroup: string;
   /** Routing preferences frozen with the plan, or null when provider defaults apply. */
   provider: ProviderRoutingConfig | null;
@@ -52,13 +55,20 @@ export interface PlanSource {
   configSha256?: string | null;
   promptVersion: number;
   scorerVersion: number;
+  /**
+   * Resolved effort lists for aliases configured with `reasoningModes: "all"`,
+   * keyed by alias name. Resolution needs the capability catalog, which is
+   * fetched after config/dataset loading and before the plan is frozen. Aliases
+   * using explicit modes are read from the config and ignore this input.
+   */
+  resolvedEfforts?: ReadonlyMap<string, readonly string[]>;
 }
 
 export type PlanResult =
   | { ok: true; plan: EvaluationPlan }
   | { ok: false; issues: readonly ValidationIssue[] };
 
-export function evaluationIdFor(modelAlias: string, reasoningMode: ReasoningMode): string {
+export function evaluationIdFor(modelAlias: string, reasoningMode: string): string {
   return `${modelAlias}::${reasoningMode}`;
 }
 
@@ -125,7 +135,15 @@ export function expandPlan(source: PlanSource): PlanResult {
     }
     const provider = alias.provider ?? null;
     const routingKey = `${alias.openRouterId}::${providerRoutingKey(provider)}`;
-    for (const reasoningMode of alias.reasoningModes) {
+    const reasoningModes = resolveAliasModes(
+      source,
+      aliasName,
+      alias,
+      `sets.${source.setName}.models[${aliasIndex}]`,
+      issues,
+    );
+    if (reasoningModes === null) return;
+    for (const reasoningMode of reasoningModes) {
       const identity = `${routingKey}::${reasoningMode}`;
       const existingAlias = evaluationIdentity.get(identity);
       if (existingAlias !== undefined) {
@@ -175,4 +193,29 @@ export function expandPlan(source: PlanSource): PlanResult {
       evaluations,
     },
   };
+}
+
+/**
+ * Modes one alias expands to. An `"all"` alias needs a resolved effort list,
+ * which only capability metadata can produce; without one the plan fails closed
+ * with `all_requires_metadata` instead of inventing evaluations.
+ */
+function resolveAliasModes(
+  source: PlanSource,
+  aliasName: string,
+  alias: ModelAliasConfig,
+  path: string,
+  issues: ValidationIssue[],
+): readonly string[] | null {
+  if (alias.reasoningModes !== "all") return alias.reasoningModes;
+  const resolved = source.resolvedEfforts?.get(aliasName);
+  if (resolved === undefined || resolved.length === 0) {
+    issues.push({
+      path,
+      code: "all_requires_metadata",
+      message: `alias "${aliasName}" uses reasoningModes "all", which expands only from model capability metadata; provide a resolved effort list before building the plan`,
+    });
+    return null;
+  }
+  return resolved;
 }

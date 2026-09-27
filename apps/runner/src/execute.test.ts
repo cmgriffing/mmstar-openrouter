@@ -1012,6 +1012,260 @@ describe("validate command", () => {
   });
 });
 
+/** Reasoning-mode expansion (7.1-7.4 of the allow-all-effort change). */
+describe("reasoningModes all", () => {
+  const ALL_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+  function buildAllConfig(): string {
+    return `${JSON.stringify(
+      {
+        version: 1,
+        dataset: { path: "fixtures.tsv" },
+        execution: {
+          maxConcurrentGroups: 2,
+          maxRetries: 1,
+          requestTimeoutMs: 5000,
+          maxRequestsPerMinute: null,
+          resultsRoot: "results",
+        },
+        models: {
+          alpha: { openRouterId: "vendor/alpha", reasoningModes: "all", rateLimitGroup: "g1" },
+        },
+        sets: { demo: { models: ["alpha"] } },
+      },
+      null,
+      2,
+    )}\n`;
+  }
+
+  function catalogModel(reasoning: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: "vendor/alpha",
+      name: "Alpha",
+      architecture: { input_modalities: ["text", "image"] },
+      reasoning,
+    };
+  }
+
+  function stubModelsFetch(data: readonly Record<string, unknown>[]): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/models")) return Response.json({ data });
+      throw new Error(`unexpected request ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("fetches the catalog and freezes concrete evaluations before any request", async () => {
+    const h = harness();
+    h.context.skipPreflight = false;
+    h.context.apiKey = "test-only-key";
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    const fetchMock = stubModelsFetch([
+      catalogModel({ supported_efforts: ["high", "low", "none"], mandatory: false }),
+    ]);
+    try {
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(0);
+      const manifest = readManifest(h, lastRunId(h));
+      const evaluations = (manifest.plan as { evaluations: { evaluationId: string }[] })
+        .evaluations;
+      expect(evaluations.map((evaluation) => evaluation.evaluationId)).toEqual([
+        "alpha::none",
+        "alpha::low",
+        "alpha::high",
+      ]);
+      expect(evaluations.every((evaluation) => !evaluation.evaluationId.endsWith("::all"))).toBe(
+        true,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://openrouter.ai/api/v1/models",
+        expect.objectContaining({ method: "GET" }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
+  it("creates no run directory when all resolution cannot preflight", async () => {
+    const h = harness();
+    h.context.skipPreflight = false;
+    h.context.apiKey = "test-only-key";
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    stubModelsFetch([{ ...catalogModel({ supported_efforts: null }), id: "vendor/other" }]);
+    try {
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(2);
+      expect(h.store.listRunIds()).toEqual([]);
+      const error = h.events.find((event) => event.kind === "ValidationError");
+      expect(String(error?.message)).toContain("vendor/alpha");
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
+  it("expands all against assumed capabilities under --skip-preflight", async () => {
+    const h = harness();
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    try {
+      const result = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(result.exitCode).toBe(0);
+      const manifest = readManifest(h, lastRunId(h));
+      const evaluations = (manifest.plan as { evaluations: { evaluationId: string }[] })
+        .evaluations;
+      expect(evaluations.map((evaluation) => evaluation.evaluationId)).toEqual(
+        ALL_EFFORTS.map((effort) => `alpha::${effort}`),
+      );
+      expect(h.stderr.some((line) => line.includes("--skip-preflight"))).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("restarts from an all-frozen plan while the config still says all", async () => {
+    const h = harness();
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    try {
+      const first = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(first.exitCode).toBe(0);
+      const sourceRunId = lastRunId(h);
+
+      const restarted = await execute(
+        { mode: "restart", selector: { runId: sourceRunId } },
+        h.context,
+      );
+      expect(restarted.exitCode).toBe(0);
+      expect(h.store.listRunIds()).toHaveLength(2);
+      const manifest = readManifest(h, lastRunId(h));
+      expect((manifest.plan as { evaluations: unknown[] }).evaluations).toHaveLength(7);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("resumes a manifest frozen from all without re-resolving", async () => {
+    const h = harness();
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const runId = lastRunId(h);
+
+      // Drop one outcome so resume has real work to select from the frozen plan.
+      const modelPath = join(h.store.paths(runId).modelsDir, "alpha.json");
+      const file = JSON.parse(readFileSync(modelPath, "utf8")) as {
+        evaluations: { outcomes: unknown[] }[];
+      };
+      file.evaluations[0]?.outcomes.pop();
+      writeFileSync(modelPath, JSON.stringify(file));
+
+      let calls = 0;
+      h.context.provider = async () => {
+        calls += 1;
+        return success("B");
+      };
+      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(result.exitCode).toBe(0);
+      expect(calls).toBe(1);
+      const childId = lastRunId(h);
+      expect(
+        (readManifest(h, childId).plan as { evaluations: unknown[] }).evaluations,
+      ).toHaveLength(7);
+      expect(allOutcomes(h, childId)).toHaveLength(14);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("rejects a frozen plan that still carries the all sentinel", async () => {
+    const h = harness();
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    try {
+      await execute({ mode: "run", set: "demo" }, h.context);
+      const runId = lastRunId(h);
+      const manifestPath = h.store.paths(runId).manifestFile;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        plan: { evaluations: { evaluationId: string; reasoningMode: string }[] };
+      };
+      manifest.plan.evaluations = [
+        {
+          ...manifest.plan.evaluations[0],
+          evaluationId: "alpha::all",
+          reasoningMode: "all",
+        } as { evaluationId: string; reasoningMode: string },
+      ];
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(result.exitCode).toBe(2);
+      const error = h.events.find((event) => event.kind === "ValidationError");
+      expect(String(error?.message)).toContain('unresolved mode "all"');
+      expect(h.store.listRunIds()).toHaveLength(1);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("validate reports the credential error when a selected set uses all", async () => {
+    const h = harness();
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await executeValidate(h.context, { preflight: false });
+      expect(result.exitCode).toBe(2);
+      expect(fetchMock).not.toHaveBeenCalled();
+      const error = h.events.find((event) => event.kind === "ValidationError");
+      expect(String(error?.message)).toContain("OPENROUTER_API_KEY is not set");
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
+  it("validate lists concrete resolved evaluations for an all set", async () => {
+    const h = harness();
+    h.context.apiKey = "test-only-key";
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    stubModelsFetch([
+      catalogModel({ supported_efforts: ["high", "low", "none"], mandatory: false }),
+    ]);
+    try {
+      const result = await executeValidate(h.context, { preflight: false });
+      expect(result.exitCode).toBe(0);
+      const ok = h.events.find((event) => event.event === "validate.ok");
+      if (ok === undefined) throw new Error("validate did not emit a summary event");
+      const sets = ok.sets as { models: string[] }[];
+      expect(sets[0]?.models).toEqual(["alpha::none", "alpha::low", "alpha::high"]);
+      const preflight = ok.preflight as { status: string };
+      expect(preflight.status).toBe("ok");
+      expect(h.store.listRunIds()).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+
+  it("validate fails when resolved all contradicts mandatory reasoning", async () => {
+    const h = harness();
+    h.context.apiKey = "test-only-key";
+    writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
+    stubModelsFetch([catalogModel({ supported_efforts: ["none", "low"], mandatory: true })]);
+    try {
+      const result = await executeValidate(h.context, { preflight: false });
+      expect(result.exitCode).toBe(2);
+      const error = h.events.find((event) => event.kind === "ValidationError");
+      expect(String(error?.message)).toContain("mandatory");
+      expect(h.store.listRunIds()).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      h.cleanup();
+    }
+  });
+});
+
 /** Chunk 11.2: error paths across the command, persistence, and export boundaries. */
 describe("hardening boundaries (11.2)", () => {
   function buildReasoningNoneConfig(): string {
@@ -1152,6 +1406,45 @@ describe("hardening boundaries (11.2)", () => {
       expect(h.events.some((event) => event.kind === "ValidationError")).toBe(true);
       expect(calls).toBe(0);
       expect(h.store.listRunIds()).toHaveLength(1);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+/** Far-future rate-limit cooldowns end the run, and resume continues after the reset. */
+describe("rate-limit halt recovery", () => {
+  it("halts on a far-future retry hint and resumes losslessly", async () => {
+    const h = harness({
+      provider: async () => ({
+        ok: false,
+        failure: {
+          category: "rate_limit",
+          message: "slow down",
+          httpStatus: 429,
+          retryAfterMs: 600_000,
+        },
+        rawResponse: null,
+      }),
+    });
+    try {
+      const halted = await execute({ mode: "run", set: "demo" }, h.context);
+      expect(halted.exitCode).toBe(1);
+      const runId = lastRunId(h);
+      expect(readManifest(h, runId).lifecycle).toMatchObject({ state: "failed" });
+      const finished = h.events.find((event) => event.event === "run.finished");
+      expect(finished?.halt).toMatchObject({ category: "rate_limit" });
+      // The failed attempt is durable while every outcome stays pending: no
+      // fixture is scored as failed by a cooldown the operator can outlast.
+      expect(allOutcomes(h, runId).every((outcome) => outcome.state === "pending")).toBe(true);
+
+      // The reset passes; resume reissues the pending work from the frozen plan.
+      h.context.provider = answerWith("B");
+      const resumed = await execute({ mode: "resume", selector: { runId } }, h.context);
+      expect(resumed.exitCode).toBe(0);
+      const childId = lastRunId(h);
+      expect(readManifest(h, childId).lifecycle).toMatchObject({ state: "completed" });
+      expect(allOutcomes(h, childId).every((outcome) => outcome.state === "settled")).toBe(true);
     } finally {
       h.cleanup();
     }

@@ -7,7 +7,6 @@
  * be inflated by raw responses, and so scheduling correctness never depends on a
  * terminal renderer.
  */
-import type { ReasoningMode } from "@mmstar/config";
 import type {
   AttemptState,
   CostRecord,
@@ -39,7 +38,8 @@ export interface RunStartedEvaluation {
   evaluationId: string;
   modelAlias: string;
   openRouterId: string;
-  reasoningMode: ReasoningMode;
+  /** Concrete reasoning mode or resolved effort string; never the `"all"` sentinel. */
+  reasoningMode: string;
   rateLimitGroup: string;
   fixtures: number;
 }
@@ -62,7 +62,8 @@ export type EngineEvent =
       evaluationId: string;
       modelAlias: string;
       openRouterId: string;
-      reasoningMode: ReasoningMode;
+      /** Concrete reasoning mode or resolved effort string; never the `"all"` sentinel. */
+      reasoningMode: string;
       rateLimitGroup: string;
     })
   | (EngineEventBase & {

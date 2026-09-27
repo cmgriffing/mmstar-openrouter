@@ -48,7 +48,11 @@ import type { PreflightEvaluation } from "./provider-preflight";
 import { buildChatCompletionRequest, type ChatCompletionRequestPayload } from "./provider-request";
 import type { NormalizedCompletion } from "./provider-response";
 import { RequestRateLimiter } from "./rate-limiter";
-import { computeRetryDelayMs, shouldRetryAttempt } from "./retry-policy";
+import {
+  computeRetryDelayMs,
+  RATE_LIMIT_HALT_THRESHOLD_MS,
+  shouldRetryAttempt,
+} from "./retry-policy";
 import { createOptionScorer, type Scorer } from "./scorer";
 
 /** One planned fixture: prompt input plus the local scoring metadata. */
@@ -125,6 +129,11 @@ export const systemClock: EngineClock = {
     }),
 };
 
+/** Base per-group penalty after the first consecutive rate-limit failure. */
+const RATE_LIMIT_GROUP_PENALTY_BASE_MS = 1_000;
+/** Cap on the progressive per-group penalty. */
+const RATE_LIMIT_GROUP_PENALTY_CAP_MS = 30_000;
+
 export interface BenchmarkEngineOptions {
   runId: string;
   evaluations: readonly PreflightEvaluation[];
@@ -200,6 +209,8 @@ export class BenchmarkEngine {
   private readonly controllers = new Map<WorkItem, AbortController>();
   private readonly inFlight = new Set<Promise<void>>();
   private readonly startedEvaluations = new Set<string>();
+  /** Consecutive rate-limit failures per group; reset by a success. */
+  private readonly rateLimitStrikes = new Map<string, number>();
 
   private cursor = 0;
   private completedItems = 0;
@@ -547,6 +558,9 @@ export class BenchmarkEngine {
       attempt.finishReason = result.value.finishReason;
       attempt.usage = result.value.usage;
       attempt.cost = result.value.cost;
+      // A completed request proves the group recovered: the next rate-limit
+      // failure starts from the base penalty again.
+      this.rateLimitStrikes.delete(evaluation.rateLimitGroup);
       this.emit({
         type: "attempt.finished",
         evaluationId: evaluation.evaluationId,
@@ -593,7 +607,22 @@ export class BenchmarkEngine {
     const retryDelayMs = retrying
       ? computeRetryDelayMs({ attemptNumber, failure, random: this.random })
       : null;
-    const retryAtMs = retryDelayMs === null ? null : finishedAtMs + retryDelayMs;
+
+    // Consecutive rate-limit failures raise the group cooldown beyond the
+    // per-item delay so one throttled fixture cannot let the rest of the group
+    // retry at the short backoff floor. Non-rate-limit retries keep their item
+    // delay, but a server hint beyond the halt threshold stops the run for any
+    // category rather than sleeping through it.
+    const escalation =
+      retryDelayMs !== null && failure.category === "rate_limit"
+        ? this.escalateRateLimitGroup(evaluation.rateLimitGroup, retryDelayMs, finishedAtMs)
+        : null;
+    const effectiveDelayMs = escalation === null ? retryDelayMs : escalation.effectiveDelayMs;
+    const retryAtMs = effectiveDelayMs === null ? null : finishedAtMs + effectiveDelayMs;
+    const haltFailure =
+      effectiveDelayMs !== null && effectiveDelayMs > RATE_LIMIT_HALT_THRESHOLD_MS
+        ? rateLimitHaltFailure(failure, finishedAtMs + effectiveDelayMs)
+        : null;
 
     this.emit({
       type: "attempt.finished",
@@ -632,16 +661,22 @@ export class BenchmarkEngine {
       this.halt(failure);
       return;
     }
-    if (retrying && retryDelayMs !== null && retryAtMs !== null) {
-      if (failure.category === "rate_limit") {
-        const until = retryAtMs;
+    if (retrying && retryAtMs !== null) {
+      if (haltFailure !== null) {
+        // The item stays pending (never settled as failed) so `resume` can
+        // reissue it once the limit resets; only the attempt records the failure.
+        this.halt(haltFailure);
+        return;
+      }
+      if (escalation !== null) {
         const existing = this.cooldownUntil.get(evaluation.rateLimitGroup) ?? 0;
-        this.cooldownUntil.set(evaluation.rateLimitGroup, Math.max(existing, until));
+        const until = Math.max(existing, escalation.untilMs);
+        this.cooldownUntil.set(evaluation.rateLimitGroup, until);
         this.cooldownAnnounced.add(evaluation.rateLimitGroup);
         this.emit({
           type: "group.cooldown.started",
           group: evaluation.rateLimitGroup,
-          until: this.iso(Math.max(existing, until)),
+          until: this.iso(until),
           reason: "rate_limit",
         });
       }
@@ -720,6 +755,27 @@ export class BenchmarkEngine {
       this.emit({ type: "engine.stopping", reason: "error" });
     }
     this.interruptWaiters();
+  }
+
+  /**
+   * Record one consecutive rate-limit failure for the group and return the
+   * escalated cooldown. The penalty doubles per consecutive failure
+   * (`1s · 2^(strikes-1)`, capped at 30s) and the effective delay is the later
+   * of it and the item's own retry delay.
+   */
+  private escalateRateLimitGroup(
+    group: string,
+    itemDelayMs: number,
+    failedAtMs: number,
+  ): { effectiveDelayMs: number; untilMs: number } {
+    const strikes = (this.rateLimitStrikes.get(group) ?? 0) + 1;
+    this.rateLimitStrikes.set(group, strikes);
+    const penalty = Math.min(
+      RATE_LIMIT_GROUP_PENALTY_CAP_MS,
+      RATE_LIMIT_GROUP_PENALTY_BASE_MS * 2 ** (strikes - 1),
+    );
+    const effectiveDelayMs = Math.max(itemDelayMs, penalty);
+    return { effectiveDelayMs, untilMs: failedAtMs + effectiveDelayMs };
   }
 
   private expireCooldowns(): void {
@@ -868,6 +924,25 @@ function attemptStateForFailure(failure: FailureRecord): AttemptState {
   if (failure.category === "cancelled") return "cancelled";
   if (failure.category === "timeout" || failure.category === "network") return "indeterminate";
   return "failed";
+}
+
+/**
+ * Halt record for a cooldown beyond `RATE_LIMIT_HALT_THRESHOLD_MS`. The message
+ * names the reset time so an operator can resume deliberately once it passes;
+ * never-attempted work stays pending across the halt.
+ */
+function rateLimitHaltFailure(failure: FailureRecord, untilMs: number): FailureRecord {
+  return {
+    category: "rate_limit",
+    // The reset time leads the message so bounding cannot hide it behind a long
+    // provider message.
+    message: boundMessage(
+      `rate limit does not reset until ${new Date(untilMs).toISOString()}; halting instead of waiting (resume after the reset): ${failure.message}`,
+    ),
+    httpStatus: failure.httpStatus,
+    retryAfterMs: failure.retryAfterMs,
+    rateLimitResetMs: failure.rateLimitResetMs ?? null,
+  };
 }
 
 /**
