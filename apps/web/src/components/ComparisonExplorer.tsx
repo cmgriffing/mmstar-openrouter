@@ -29,6 +29,7 @@ import type {
   SortDirection,
 } from "../lib/view";
 import {
+  COMPARISON_METRIC_OPTIONS,
   comparisonChartSeries,
   comparisonCost,
   comparisonCountLabel,
@@ -275,31 +276,97 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
   }
 
   const selectionEmpty = selectedRows.length === 0;
+  const countLabel = comparisonCountLabel(selectedRows.length, comparisons.length);
+  const costOnAxis = axes.x === "cost" || axes.y === "cost";
+  // Both triggers bind the one selection state; only ephemeral panel state
+  // (open, query, collapsed) differs per instance and stays inside ModelPicker.
+  const pickerProps = {
+    groups,
+    selection,
+    selectedCount: selectedRows.length,
+    total: comparisons.length,
+    onToggleEvaluation: toggleEvaluation,
+    onToggleVisibleGroup: toggleVisibleGroup,
+    onSelectAll: () => setSelection(null),
+    onClearAll: () => setSelection([]),
+  };
 
   return (
     <div className="comparison-island">
-      <div className="selector-bar">
-        <ModelPicker
-          groups={groups}
-          selection={selection}
-          selectedCount={selectedRows.length}
-          total={comparisons.length}
-          onToggleEvaluation={toggleEvaluation}
-          onToggleVisibleGroup={toggleVisibleGroup}
-          onSelectAll={() => setSelection(null)}
-          onClearAll={() => setSelection([])}
+      <div className="chart-block">
+        <div className="chart-controls">
+          <div className="field">
+            <label htmlFor="chart-axis-x">X axis</label>
+            <select
+              id="chart-axis-x"
+              value={axes.x}
+              onChange={(event) => changeAxis("x", event.target.value as ComparisonMetric)}
+            >
+              {COMPARISON_METRIC_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="chart-axis-y">Y axis</label>
+            <select
+              id="chart-axis-y"
+              value={axes.y}
+              onChange={(event) => changeAxis("y", event.target.value as ComparisonMetric)}
+            >
+              {COMPARISON_METRIC_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {costOnAxis && (
+            <div className="field">
+              <span className="field-label" id="chart-scale-label">
+                Cost scale
+              </span>
+              <fieldset className="chart-scale" aria-labelledby="chart-scale-label">
+                <button
+                  type="button"
+                  className={`button button--quiet${costScale === "log" ? " is-active" : ""}`}
+                  aria-pressed={costScale === "log"}
+                  onClick={() => setCostScale("log")}
+                >
+                  Log
+                </button>
+                <button
+                  type="button"
+                  className={`button button--quiet${costScale === "linear" ? " is-active" : ""}`}
+                  aria-pressed={costScale === "linear"}
+                  onClick={() => setCostScale("linear")}
+                >
+                  Linear
+                </button>
+              </fieldset>
+            </div>
+          )}
+          <ModelPicker {...pickerProps} context="above chart" />
+        </div>
+
+        <QuadrantChart
+          points={series.points}
+          excluded={series.excluded}
+          x={axes.x}
+          y={axes.y}
+          costScale={costScale}
         />
       </div>
 
-      <QuadrantChart
-        points={series.points}
-        excluded={series.excluded}
-        x={axes.x}
-        y={axes.y}
-        costScale={costScale}
-        onAxisChange={changeAxis}
-        onCostScaleChange={setCostScale}
-      />
+      <div className="table-controls">
+        <ModelPicker {...pickerProps} context="above table" />
+      </div>
+
+      <p className="visually-hidden" role="status" aria-live="polite">
+        {countLabel}
+      </p>
 
       {selectionEmpty ? (
         <div className="empty-panel">

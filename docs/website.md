@@ -19,8 +19,8 @@ apps/web/src/styles/global.css        field-report design system
 apps/web/src/lib/format.ts            pure value formatting (unknown vs zero)
 apps/web/src/lib/view.ts              outcome labels, filters, selection/axes/sorting, metrics
 apps/web/src/components/FixtureExplorer.tsx  drilldown island (filters, pages, states)
-apps/web/src/components/ComparisonExplorer.tsx  comparison island (picker host, chart, sortable table)
-apps/web/src/components/ModelPicker.tsx  searchable model/effort picker (trigger, panel, bulk actions)
+apps/web/src/components/ComparisonExplorer.tsx  comparison island (controls row, picker hosts, chart, sortable table)
+apps/web/src/components/ModelPicker.tsx  searchable model/effort picker (compact trigger, panel, bulk actions)
 apps/web/src/components/QuadrantChart.tsx  hand-rolled SVG quadrant chart (points, medians, tooltip)
 apps/web/src/pages/index.astro        comparison island host + publication stat strip
 apps/web/src/pages/fixtures.astro     drilldown shell + island
@@ -69,7 +69,7 @@ JavaScript and never opens a writable database.
 
 | Route | Behavior |
 | --- | --- |
-| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a hand-rolled quadrant chart, a category accuracy matrix, and the full run lineage table. A searchable model/effort picker backs the `models` selection and filters the table, chart, and matrix together; the trigger shows the selection count, and the panel searches alias/OpenRouter ID/effort and offers `Select all`, `Clear all`, and a filter-scoped matching action. `sort`/`dir` anchors order the table and `x`/`y`/`scale` choose the chart axes and cost scale. The stat strip and run lineage stay publication-wide. A family switcher is deliberately absent. |
+| `/` | One comparison of every model in the publication (scored/selected accuracy, coverage, outcome counts, request and fixture latency, tokens, reported/estimated/unknown cost) with winning-family provenance, a hand-rolled quadrant chart, a category accuracy matrix, and the full run lineage table. A searchable model/effort picker backs the `models` selection and filters the table, chart, and matrix together; an identical trigger sits in the chart controls row and directly above the table, both showing the shared selection count, and the panel searches alias/OpenRouter ID/effort and offers `Select all`, `Clear all`, and a filter-scoped matching action. `sort`/`dir` anchors order the table and `x`/`y`/`scale` choose the chart axes and cost scale. The stat strip and run lineage stay publication-wide. A family switcher is deliberately absent. |
 | `/fixtures?evaluationId&category&state&kind&offset` | Paginated fixture drilldown (25 per page) over publication-wide effective outcomes, with recovered/indeterminate badges; filtering re-queries `/api/fixtures.json` and keeps the URL shareable. |
 | `/fixture?evaluationId&fixtureId&back` | One fixture: original image, question, effective outcome, parsed/expected answer, response text, usage/cost, failure details, outcome lineage (effective vs superseded), and the attempt ledger. |
 
@@ -88,18 +88,26 @@ Presentation rules:
   and unknown parameter values are dropped and reported with the same
   ignored-filter notice as the drilldown; the canonical URL omits defaults and
   the all-selected case.
-- The picker trigger reads `N of M evaluations` and opens a non-modal panel on
-  demand. Search matches model alias, `openRouterId`, and effort name
-  case-insensitively; an alias/ID match shows all of a group's efforts, an
-  effort match shows only the matching rows, and the group checkbox and its
-  `selected/visible` count apply to exactly the rows visible under the current
-  filter. Efforts are ordered by intensity — `default` first, then `none`,
-  `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — not alphabetically.
-  `Select all`/`Clear all` keep the all-selected (`models` absent) and empty
-  (`models=`) URL states, and the filter-scoped footer action reads
-  `Select N matching` or `Deselect N matching`. Panel open state, search text,
-  and per-group expansion are ephemeral component state and never enter the
-  URL; selection changes are announced through a live region.
+- The picker trigger is presented twice — in the chart controls row (right of
+  the axis and cost-scale controls) and directly above the comparison table —
+  and both read the same shared `N of M evaluations` count. Either trigger
+  drives the one selection state, so a change updates both triggers, the table,
+  the chart, and the category matrix; the table-side trigger stays rendered
+  when the selection is empty. Search matches model alias, `openRouterId`, and
+  effort name case-insensitively; an alias/ID match shows all of a group's
+  efforts, an effort match shows only the matching rows, and the group checkbox
+  and its `selected/visible` count apply to exactly the rows visible under the
+  current filter. Efforts are ordered by intensity — `default` first, then
+  `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — not
+  alphabetically. `Select all`/`Clear all` keep the all-selected (`models`
+  absent) and empty (`models=`) URL states, and the filter-scoped footer action
+  reads `Select N matching` or `Deselect N matching`. Panel open state, search
+  text, and per-group expansion are per-instance ephemeral component state and
+  never enter the URL; each trigger and panel names its position ("above chart"
+  / "above table"), and selection changes are announced exactly once through a
+  single live region owned by the comparison island. The chart controls row
+  pins every control to one rendered height, so select font-metric differences
+  between the webfont and its fallback cannot misalign the row.
 - Table headers are anchors carrying `sort`/`dir`, so sorting works without
   JavaScript; hydration re-sorts in place and keeps the URL shareable. Null
   cost, token, and latency values always sort last in either direction, and
@@ -156,7 +164,7 @@ With that server running, the comparison island states can be reached directly:
 (single selection, no median crosshairs), `/?models=` (empty states for chart,
 table, and matrix), `/?sort=cost&dir=asc`, `/?x=pass&y=cost&scale=linear`, and
 `/?models=ghost&x=nope` (ignored-filter notice). The picker itself has no URL
-state: open the trigger and search an alias, an OpenRouter ID, or an effort
+state: open either trigger and search an alias, an OpenRouter ID, or an effort
 name to exercise filtering, filter-scoped group toggling, and the matching bulk
 action.
 
@@ -268,10 +276,31 @@ focus to the trigger, and outside activation closed it without moving focus; the
 region carried the count; efforts rendered in intensity order (`none`, `low`, `high`);
 and no picker state entered the URL. Existing `?models=` URLs still restored the
 selection and `?models=ghost` kept the ignored-filter notice. The panel also dismisses
-when focus moves outside it; that behavior was added after the 2026-09-25 pass and
-awaits a browser re-check. Narrow-screen layout was checked at 400 px: the trigger
-spans the selector bar, the panel stays anchored, and the page has no horizontal
-overflow.
+when focus moves outside it; that behavior was added after the 2026-09-25 pass and was
+re-checked on 2026-09-26 (focusing the X-axis select closed the open panel without
+moving focus). The 2026-09-25 narrow-screen check at 400 px covered the
+full-width selector-bar trigger, which the compact-controls revision replaced; the
+compact chart-row/table-row layout is covered by the browser check recorded below.
+
+The compact comparison controls were checked in a real browser (agent-browser/Chromium)
+on 2026-09-26 against the deterministic verification publication: the chart controls row
+rendered the two axis selects, the cost-scale buttons, and the picker trigger at an
+identical 32 px height (pinned by the controls-row CSS, independent of which font
+loads, so the fallback-font render measures the same) with aligned bottom edges and
+the trigger flush with the row's right edge, and
+the toolbar stayed 4 px from the chart inside the island's 16 px grid rhythm. A change
+from either trigger (deselecting `demo::low` above the table, then deselecting
+`demo::high` above the chart) updated both `N of 3` counts, the table rows, the chart
+points, the category matrix, and the `models` URL together, with the panels staying
+open across toggles. Each panel kept its own search text (`high` stayed in the chart
+panel while the table panel stayed blank), collapse state (the chart panel stayed
+collapsed with the table panel expanded), and open/close state. The table-side picker
+stayed visible at `0 of 3` and restored a selection in place; Escape closed a panel
+and returned focus to the originating trigger; exactly one live region carried the
+count and each trigger announced a distinct name (`above chart` / `above table`); and
+both panels opened right-anchored at a 280 px minimum with no clipping. At a 400 px
+viewport the controls wrapped onto three lines with full-width triggers and panel and
+zero horizontal overflow.
 
 - comparisons render every family present in the publication, including the incomplete
   and mixed-settings notices, with effective-outcome counts (a recovered failure counts

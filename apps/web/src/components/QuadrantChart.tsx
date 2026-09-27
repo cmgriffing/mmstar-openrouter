@@ -5,7 +5,7 @@
  * evaluation, median crosshairs, keyboard-focusable points, and a hover/focus
  * tooltip that renders unknown values as "not reported". Cost axes default to
  * a log10 scale. The component holds only the active tooltip; selection, axes,
- * and scale are owned by `ComparisonExplorer`.
+ * scale, and the chart controls row are owned by `ComparisonExplorer`.
  */
 import { useState } from "react";
 import { formatCount, formatPercent } from "../lib/format";
@@ -18,7 +18,6 @@ import type {
 } from "../lib/view";
 import {
   buildChartAxisScale,
-  COMPARISON_METRIC_OPTIONS,
   chartEmptyMessage,
   chartExclusionText,
   median,
@@ -40,8 +39,6 @@ export interface QuadrantChartProps {
   x: ComparisonMetric;
   y: ComparisonMetric;
   costScale: CostScale;
-  onAxisChange(axis: "x" | "y", metric: ComparisonMetric): void;
-  onCostScaleChange(scale: CostScale): void;
 }
 
 /** Stable string hash so colors never move between renders. */
@@ -94,10 +91,9 @@ function TooltipRow(props: { label: string; value: string }) {
 }
 
 export default function QuadrantChart(props: QuadrantChartProps) {
-  const { points, excluded, x, y, costScale, onAxisChange, onCostScaleChange } = props;
+  const { points, excluded, x, y, costScale } = props;
   const [activePoint, setActivePoint] = useState<ComparisonChartPoint | null>(null);
 
-  const costOnAxis = x === "cost" || y === "cost";
   const xScale = buildChartAxisScale(
     points.map((point) => point.x),
     x === "cost" && costScale === "log",
@@ -121,62 +117,6 @@ export default function QuadrantChart(props: QuadrantChartProps) {
 
   return (
     <figure className="chart-figure">
-      <div className="chart-controls">
-        <div className="field">
-          <label htmlFor="chart-axis-x">X axis</label>
-          <select
-            id="chart-axis-x"
-            value={x}
-            onChange={(event) => onAxisChange("x", event.target.value as ComparisonMetric)}
-          >
-            {COMPARISON_METRIC_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="chart-axis-y">Y axis</label>
-          <select
-            id="chart-axis-y"
-            value={y}
-            onChange={(event) => onAxisChange("y", event.target.value as ComparisonMetric)}
-          >
-            {COMPARISON_METRIC_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        {costOnAxis && (
-          <div className="field">
-            <span className="field-label" id="chart-scale-label">
-              Cost scale
-            </span>
-            <fieldset className="chart-scale" aria-labelledby="chart-scale-label">
-              <button
-                type="button"
-                className={`button button--quiet${costScale === "log" ? " is-active" : ""}`}
-                aria-pressed={costScale === "log"}
-                onClick={() => onCostScaleChange("log")}
-              >
-                Log
-              </button>
-              <button
-                type="button"
-                className={`button button--quiet${costScale === "linear" ? " is-active" : ""}`}
-                aria-pressed={costScale === "linear"}
-                onClick={() => onCostScaleChange("linear")}
-              >
-                Linear
-              </button>
-            </fieldset>
-          </div>
-        )}
-      </div>
-
       {points.length === 0 || xScale === null || yScale === null ? (
         <div className="empty-panel chart-empty">
           <h3>Nothing plottable</h3>
