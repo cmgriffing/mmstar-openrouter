@@ -7,7 +7,7 @@
   "execution": {
     "maxConcurrentGroups": 4,
     "maxRetries": 3,
-    "requestTimeoutMs": 300000,
+    "requestTimeoutMs": 600000,
     "maxRequestsPerMinute": null,
     "resultsRoot": "results"
   },
