@@ -7,45 +7,45 @@
   "execution": {
     "maxConcurrentGroups": 4,
     "maxRetries": 3,
-    "requestTimeoutMs": 120000,
+    "requestTimeoutMs": 300000,
     "maxRequestsPerMinute": null,
     "resultsRoot": "results"
   },
   "models": {
-    "space-bunny-alpha": {
-      "openRouterId": "stealth/space-bunny-alpha",
-      "reasoningModes": ["low"],
-      "rateLimitGroup": "testing-group1"
+    "deepseek-v4.1-flash": {
+      "openRouterId": "deepseek/deepseek-v4.1-flash",
+      "reasoningModes": "all",
+      "rateLimitGroup": "deepseek"
     },
-    "qwen3.8-27b": {
-      "openRouterId": "qwen/qwen3.8-27b:free",
-      "reasoningModes": ["low"],
-      "rateLimitGroup": "testing-group2"
+    "qwen3.7-flash": {
+      "openRouterId": "qwen/qwen3.7-flash",
+      "reasoningModes": "all",
+      "rateLimitGroup": "alibaba"
     },
-    "gemma-4-26b-a4b-it": {
-      "openRouterId": "google/gemma-4-26b-a4b-it:free",
-      "reasoningModes": ["default"],
-      "rateLimitGroup": "testing-group3"
+    "glm-5.3-flash": {
+      "openRouterId": "z-ai/glm-5.3-flash",
+      "reasoningModes": "all",
+      "rateLimitGroup": "glm"
     },
-    "gemma-4-31b-it": {
-      "openRouterId": "google/gemma-4-31b-it:free",
-      "reasoningModes": ["default"],
-      "rateLimitGroup": "testing-group3"
+    "ternary-bonsai-2-27b": {
+      "openRouterId": "prism-ml/ternary-bonsai-2-27b",
+      "reasoningModes": "all",
+      "rateLimitGroup": "ternary"
     },
-    "nemotron-3-nano-omni-30b-a3b-reasoning": {
-      "openRouterId": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-      "reasoningModes": ["default"],
-      "rateLimitGroup": "testing-group4"
+    "mimo-v2.6-flash": {
+      "openRouterId": "xiaomi/mimo-v2.6-flash",
+      "reasoningModes": "all",
+      "rateLimitGroup": "mimo"
     }
   },
   "sets": {
     "testing": {
       "models": [
-        "space-bunny-alpha",
-        "qwen3.8-27b",
-        "gemma-4-26b-a4b-it",
-        "gemma-4-31b-it",
-        "nemotron-3-nano-omni-30b-a3b-reasoning"
+        "deepseek-v4.1-flash",
+        "qwen3.7-flash",
+        "glm-5.3-flash",
+        "ternary-bonsai-2-27b",
+        "mimo-v2.6-flash"
       ]
     }
   }
