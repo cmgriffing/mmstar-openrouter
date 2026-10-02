@@ -816,6 +816,9 @@ describe("retry-failed (5.4)", () => {
       expect(again.exitCode).toBe(0);
       expect(h.events.filter((event) => event.event === "run.nothing-to-do")).toHaveLength(1);
       expect(h.store.listRunIds().length).toBe(2);
+      const noop = h.events.find((event) => event.event === "run.nothing-to-do");
+      expect(noop?.reason).toBe("no unresolved request failures remain");
+      expect(noop?.ownerRunId).toBeUndefined();
     } finally {
       h.cleanup();
     }
@@ -883,6 +886,140 @@ describe("retry-failed (5.4)", () => {
         .flatMap((evaluation) => evaluation.attempts);
       expect(attempts.map((attempt) => attempt.evaluationId)).toEqual(["alpha::default"]);
       expect(h.store.readManifest(recoveryId).lineage.recoveredFixtureIds).toEqual(["0"]);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+describe("continuation tip", () => {
+  /** Fixture 0 ("sky") settles; fixture 1 keeps timing out, so the recovery owns it. */
+  const partialRecovery: CompletionProvider = async (payload) => {
+    const part = payload.messages[0]?.content[0];
+    const text = part?.type === "text" ? part.text : "";
+    return text.includes("sky") ? success("B") : failure("timeout");
+  };
+
+  /** Primary with every fixture timed out, then one partial recovery child. */
+  async function primaryAndPartialRecovery(
+    h: Harness,
+  ): Promise<{ primaryId: string; recoveryId: string }> {
+    await execute({ mode: "run", set: "demo" }, h.context);
+    const primaryId = lastRunId(h);
+    const result = await execute(
+      { mode: "retry-failed", selector: { runId: primaryId } },
+      { ...h.context, provider: partialRecovery },
+    );
+    expect(result.exitCode).toBe(0);
+    const recoveryId = lastRunId(h);
+    expect(h.store.readManifest(recoveryId).lineage.parentRunId).toBe(primaryId);
+    return { primaryId, recoveryId };
+  }
+
+  it("retry-failed --latest recovers from a recovery tip that owns the remaining timeouts", async () => {
+    const h = harness({ provider: async () => failure("timeout") });
+    try {
+      const { primaryId, recoveryId } = await primaryAndPartialRecovery(h);
+      // The continuation tip is a recovery child while the primary-based
+      // selector contract stays untouched for restart/export.
+      expect(h.store.resolveSelector({ latest: true }).runId).toBe(primaryId);
+
+      const eventsBefore = h.events.length;
+      const result = await execute(
+        { mode: "retry-failed", selector: { latest: true } },
+        { ...h.context, provider: answerWith("B") },
+      );
+      expect(result.exitCode).toBe(0);
+
+      const childId = lastRunId(h);
+      expect(childId).not.toBe(recoveryId);
+      const child = h.store.readManifest(childId);
+      expect(child.lineage.kind).toBe("recovery");
+      expect(child.lineage.parentRunId).toBe(recoveryId);
+      // Only the still-timed-out fixture is reissued; fixture 0 was resolved.
+      expect(child.lineage.recoveredFixtureIds).toEqual(["1"]);
+      expect(allOutcomes(h, childId).every((outcome) => outcome.state === "settled")).toBe(true);
+      expect(
+        h.events.slice(eventsBefore).some((event) => event.event === "run.nothing-to-do"),
+      ).toBe(false);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("resume --latest follows a recovery tip and discloses only the reissued indeterminate work", async () => {
+    const h = harness({ provider: async () => failure("timeout") });
+    try {
+      const { recoveryId } = await primaryAndPartialRecovery(h);
+      const eventsBefore = h.events.length;
+      const result = await execute(
+        { mode: "resume", selector: { latest: true } },
+        { ...h.context, provider: answerWith("B") },
+      );
+      expect(result.exitCode).toBe(0);
+
+      const resumedId = lastRunId(h);
+      const resumed = h.store.readManifest(resumedId);
+      expect(resumed.lineage.parentRunId).toBe(recoveryId);
+      // A resume keeps the source's lineage kind, so the child continues the
+      // recovery chain instead of restarting from the primary.
+      expect(resumed.lineage.kind).toBe("recovery");
+      expect(resumed.lineage.recoveredFixtureIds).toEqual(["1"]);
+
+      const disclosure = h.events
+        .slice(eventsBefore)
+        .find((event) => event.event === "run.indeterminate-disclosure");
+      expect(disclosure?.runId).toBe(resumedId);
+      // Fixture 1 x both evaluations: exactly the indeterminate work reissued.
+      expect(disclosure?.indeterminateCount).toBe(2);
+      expect(h.stderr.join("")).toContain("unknown upstream completion");
+      expect(allOutcomes(h, resumedId).every((outcome) => outcome.state === "settled")).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("names the descendant owner for an explicit ancestor and creates no run", async () => {
+    const h = harness({ provider: async () => failure("timeout") });
+    try {
+      const { primaryId, recoveryId } = await primaryAndPartialRecovery(h);
+      let calls = 0;
+      const provider: CompletionProvider = async () => {
+        calls += 1;
+        return success("B");
+      };
+      const runsBefore = h.store.listRunIds().length;
+
+      const eventsBefore = h.events.length;
+      const recovery = await execute(
+        { mode: "retry-failed", selector: { runId: primaryId } },
+        { ...h.context, provider },
+      );
+      expect(recovery.exitCode).toBe(0);
+      expect(calls).toBe(0);
+      expect(h.store.listRunIds()).toHaveLength(runsBefore);
+      const noop = h.events
+        .slice(eventsBefore)
+        .find((event) => event.event === "run.nothing-to-do");
+      expect(noop?.runId).toBe(primaryId);
+      expect(noop?.ownerRunId).toBe(recoveryId);
+      expect(String(noop?.reason)).toContain(recoveryId);
+      expect(h.stderr.join("")).toContain(recoveryId);
+
+      // The resume-mode diagnostic names the same owner for resumable work.
+      const resumeFrom = h.events.length;
+      const resumed = await execute(
+        { mode: "resume", selector: { runId: primaryId } },
+        { ...h.context, provider },
+      );
+      expect(resumed.exitCode).toBe(0);
+      expect(calls).toBe(0);
+      expect(h.store.listRunIds()).toHaveLength(runsBefore);
+      const resumeNoop = h.events
+        .slice(resumeFrom)
+        .find((event) => event.event === "run.nothing-to-do");
+      expect(resumeNoop?.ownerRunId).toBe(recoveryId);
+      expect(String(resumeNoop?.reason)).toContain("resumable work");
     } finally {
       h.cleanup();
     }

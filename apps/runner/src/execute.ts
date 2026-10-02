@@ -56,7 +56,10 @@ import {
   InflightMarkerWriter,
   isKnownFailureCategory,
   isResumeCandidate,
+  isResumeCandidateEntry,
+  isRetryableFailureEntry,
   isRetryableFailureOutcome,
+  lineageTip,
   outcomeIdentity,
   PublicationError,
   type ReconciledRun,
@@ -361,7 +364,13 @@ async function runContinuation(
   context: RunContext,
   store: RunStore,
 ): Promise<CommandResult> {
-  const source = store.resolveSelector(selector);
+  const selected = store.resolveSelector(selector);
+  // Continuation `--latest` follows the lineage tip — including recovery
+  // children — so repeated recovery keeps narrowing the same chain;
+  // `restart`/`export` keep the primary-based `RunStore.resolveSelector`
+  // contract. The tip must be resolved before config/dataset loading and lock
+  // acquisition so the run that gets locked is the one that gets continued.
+  const source = selector.latest === true ? lineageTip(resolveLineage(store, selected)) : selected;
   const config = loadConfig(context, source.configuration.source);
   verifyModelsAvailable(source, config);
 
@@ -415,7 +424,13 @@ async function continueFromSource(
       runId: source.runId,
       mode,
       reason: selection.reason,
+      ...(selection.ownerRunId === null ? {} : { ownerRunId: selection.ownerRunId }),
     });
+    if (selection.ownerRunId !== null) {
+      context.stderr.write(
+        `mmstar: run ${source.runId} has no ${mode === "resume" ? "resumable" : "retryable"} work; continue from run ${selection.ownerRunId} instead (mmstar ${mode} ${selection.ownerRunId})\n`,
+      );
+    }
     return { exitCode: 0 };
   }
 
@@ -478,6 +493,12 @@ interface SelectionResult {
   evaluationFixtures: Map<string, string[]>;
   indeterminateCount: number;
   reason: string;
+  /**
+   * Newest descendant that owns resumable or retryable work. Only set for an
+   * empty selection, where it turns an ancestor-ID no-op into an actionable
+   * pointer; null when nothing anywhere in the lineage still needs work.
+   */
+  ownerRunId: string | null;
 }
 
 function selectWork(
@@ -570,13 +591,45 @@ function selectWork(
     }
   }
 
-  const reason =
-    candidates === 0
-      ? mode === "resume"
-        ? "no pending, cancelled, or interrupted work remains"
-        : "no unresolved request failures remain"
-      : "";
-  return { evaluationFixtures: selection, indeterminateCount, reason };
+  let ownerRunId: string | null = null;
+  let reason = "";
+  if (candidates === 0) {
+    ownerRunId = descendantOwner(mode, source, lineage);
+    reason =
+      mode === "resume"
+        ? ownerRunId === null
+          ? "no pending, cancelled, or interrupted work remains"
+          : `no pending, cancelled, or interrupted work remains; run ${ownerRunId} owns resumable work`
+        : ownerRunId === null
+          ? "no unresolved request failures remain"
+          : `no unresolved request failures remain; run ${ownerRunId} owns retryable work`;
+  }
+  return { evaluationFixtures: selection, indeterminateCount, reason, ownerRunId };
+}
+
+/**
+ * Newest descendant that owns work this mode would reissue. Used only for the
+ * empty-selection diagnostic: an explicit ancestor ID stays a no-op, but the
+ * operator is told which run `--latest` would continue from. `lineage.runs` is
+ * sorted by creation order, so the last matching run is the newest owner.
+ */
+function descendantOwner(
+  mode: "resume" | "retry-failed",
+  source: RunManifest,
+  lineage: LineageView,
+): string | null {
+  const owners = new Set<string>();
+  for (const entry of lineage.effective.values()) {
+    if (entry.runId === source.runId) continue;
+    const owned =
+      mode === "resume" ? isResumeCandidateEntry(entry) : isRetryableFailureEntry(entry);
+    if (owned) owners.add(entry.runId);
+  }
+  let newest: string | null = null;
+  for (const run of lineage.runs) {
+    if (owners.has(run.runId)) newest = run.runId;
+  }
+  return newest;
 }
 
 /**

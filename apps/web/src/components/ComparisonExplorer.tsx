@@ -22,12 +22,7 @@ import {
   formatTokens,
   formatTokensExact,
 } from "../lib/format";
-import type {
-  ComparisonMetric,
-  ComparisonSortColumn,
-  CostScale,
-  SortDirection,
-} from "../lib/view";
+import type { ComparisonMetric, ComparisonSortColumn, CostScale, SortDirection } from "../lib/view";
 import {
   COMPARISON_METRIC_OPTIONS,
   comparisonChartSeries,
@@ -132,31 +127,22 @@ function unresolvedSummary(row: EvaluationComparison): string {
   const parts: string[] = [];
   if (row.pending > 0) parts.push(`${formatCount(row.pending)} pending`);
   if (row.failed > 0) parts.push(`${formatCount(row.failed)} failed`);
-  if (row.indeterminate > 0)
-    parts.push(`${formatCount(row.indeterminate)} indeterminate`);
+  if (row.indeterminate > 0) parts.push(`${formatCount(row.indeterminate)} indeterminate`);
   if (row.cancelled > 0) parts.push(`${formatCount(row.cancelled)} cancelled`);
   return parts.join(" · ");
 }
 
 export default function ComparisonExplorer(props: ComparisonExplorerProps) {
   const { comparisons } = props;
-  const [selection, setSelection] = useState<string[] | null>(
-    props.initialSelection,
-  );
+  const [selection, setSelection] = useState<string[] | null>(props.initialSelection);
   const [sort, setSort] = useState<ComparisonSortColumn>(props.initialSort);
   const [dir, setDir] = useState<SortDirection>(props.initialDir);
   const [axes, setAxes] = useState(props.initialAxes);
   const [costScale, setCostScale] = useState<CostScale>(props.initialCostScale);
   const skipInitialUrlSync = useRef(true);
 
-  const allIds = useMemo(
-    () => comparisons.map((row) => row.evaluationId),
-    [comparisons],
-  );
-  const selectedSet = useMemo(
-    () => (selection === null ? null : new Set(selection)),
-    [selection],
-  );
+  const allIds = useMemo(() => comparisons.map((row) => row.evaluationId), [comparisons]);
+  const selectedSet = useMemo(() => (selection === null ? null : new Set(selection)), [selection]);
   const selectedRows = useMemo(
     () =>
       selectedSet === null
@@ -188,37 +174,24 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
       sort,
       dir,
     });
-    const url =
-      query === ""
-        ? window.location.pathname
-        : `${window.location.pathname}?${query}`;
+    const url = query === "" ? window.location.pathname : `${window.location.pathname}?${query}`;
     window.history.replaceState(null, "", url);
   }, [selection, axes, costScale, sort, dir]);
 
   // The category matrix is server-rendered outside this island; one selection
   // state drives it by toggling row visibility and its empty state.
   useEffect(() => {
-    document
-      .querySelectorAll<HTMLElement>("[data-matrix-evaluation]")
-      .forEach((element) => {
-        element.hidden = matrixRowHidden(
-          selectedSet,
-          element.dataset.matrixEvaluation ?? "",
-        );
-      });
+    document.querySelectorAll<HTMLElement>("[data-matrix-evaluation]").forEach((element) => {
+      element.hidden = matrixRowHidden(selectedSet, element.dataset.matrixEvaluation ?? "");
+    });
     const selectionEmpty = matrixEmptySelection(selectedSet);
     const table = document.querySelector<HTMLElement>("[data-matrix-table]");
     if (table !== null) table.hidden = selectionEmpty;
     const empty = document.querySelector<HTMLElement>("[data-matrix-empty]");
     if (empty !== null) empty.hidden = !selectionEmpty;
-    const count = document.querySelector<HTMLElement>(
-      "[data-comparison-count]",
-    );
+    const count = document.querySelector<HTMLElement>("[data-comparison-count]");
     if (count !== null) {
-      count.textContent = comparisonCountLabel(
-        selectedRows.length,
-        comparisons.length,
-      );
+      count.textContent = comparisonCountLabel(selectedRows.length, comparisons.length);
     }
   }, [selectedSet, selectedRows.length, comparisons.length]);
 
@@ -253,9 +226,7 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
       <th
         scope="col"
         className={className}
-        aria-sort={
-          active ? (dir === "asc" ? "ascending" : "descending") : undefined
-        }
+        aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : undefined}
       >
         <a
           className="sort-anchor"
@@ -375,11 +346,7 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
         </div>
       ) : (
         // biome-ignore lint/a11y/noNoninteractiveTabindex: the comparison table can scroll horizontally and must stay keyboard-scrollable.
-        <section
-          className="table-wrap"
-          tabIndex={0}
-          aria-label="Model comparisons"
-        >
+        <section className="table-wrap" tabIndex={0} aria-label="Model comparisons">
           <table className="data-table comparison-table">
             <thead>
               <tr>
@@ -398,18 +365,12 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
                 const chips = outcomeChips(row);
                 const incomplete = isIncomplete(row);
                 return (
-                  <tr
-                    key={row.evaluationId}
-                    className={incomplete ? "is-incomplete" : undefined}
-                  >
+                  <tr key={row.evaluationId} className={incomplete ? "is-incomplete" : undefined}>
                     <td data-label="Model">
                       <span className="model-name">{row.modelAlias}</span>
                       <span className="badge-row">
                         {incomplete && (
-                          <span
-                            className="badge badge--warn"
-                            title={unresolvedSummary(row)}
-                          >
+                          <span className="badge badge--warn" title={unresolvedSummary(row)}>
                             ! incomplete
                           </span>
                         )}
@@ -427,9 +388,7 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
                       <span className="mono">{row.reasoningMode}</span>
                     </td>
                     <td data-label="Scored accuracy">
-                      <span className="figure">
-                        {formatPercent(row.scoredAccuracy)}
-                      </span>
+                      <span className="figure">{formatPercent(row.scoredAccuracy)}</span>
                       <span className="figure-sub">
                         {formatFraction(row.correct, row.settled)} settled
                       </span>
@@ -440,22 +399,16 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
                     <td data-label="Outcomes">
                       <span className="badge-row">
                         {chips.map((chip) => (
-                          <span
-                            className={`badge badge--${chip.tone}`}
-                            key={chip.label}
-                          >
+                          <span className={`badge badge--${chip.tone}`} key={chip.label}>
                             {chip.symbol} {formatCount(chip.count)}
                           </span>
                         ))}
                       </span>
                     </td>
                     <td data-label="Latency">
-                      <span className="mono">
-                        {formatLatency(row.meanRequestLatencyMs)}
-                      </span>
+                      <span className="mono">{formatLatency(row.meanRequestLatencyMs)}</span>
                       <span className="figure-sub">
-                        request · {formatLatency(row.meanTotalFixtureTimeMs)}{" "}
-                        fixture
+                        request · {formatLatency(row.meanTotalFixtureTimeMs)} fixture
                       </span>
                     </td>
                     <td data-label="Tokens">
@@ -483,9 +436,7 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
                     </td>
                     <td data-label="Cost">
                       <span className="mono">{cost.text}</span>
-                      {cost.detail !== null && (
-                        <span className="figure-sub">{cost.detail}</span>
-                      )}
+                      {cost.detail !== null && <span className="figure-sub">{cost.detail}</span>}
                     </td>
                   </tr>
                 );
@@ -496,11 +447,10 @@ export default function ComparisonExplorer(props: ComparisonExplorerProps) {
       )}
 
       <p className="footnote">
-        Scored accuracy = correct / settled; selected accuracy = correct /
-        selected; coverage = settled / selected. Attempts counts effective
-        outcomes. Cost and token totals come from the winning family's full
-        attempt ledger, including superseded attempts from retries and recovery;
-        unknown cost counts attempts without a reported or estimated price.
+        Scored accuracy = correct / settled; selected accuracy = correct / selected; coverage =
+        settled / selected. Attempts counts effective outcomes. Cost and token totals come from the
+        winning family's full attempt ledger, including superseded attempts from retries and
+        recovery; unknown cost counts attempts without a reported or estimated price.
       </p>
     </div>
   );

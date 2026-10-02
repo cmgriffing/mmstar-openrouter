@@ -208,21 +208,27 @@ layout, schema, and views.
   without that warning: the abort was local and deliberate, and the engine records it as
   `cancelled` rather than `indeterminate`. Cancellation does not prove the upstream
   provider skipped the request, so treat a stopped run's in-flight requests as possibly
-  charged once already.
+  charged once already. With `--latest`, it continues from the lineage tip (see Selector
+  rules): after a `retry-failed`, `resume --latest` extends the recovery child rather
+  than the primary, and discloses only the indeterminate work that child still owns.
 - **`retry-failed`** creates a `recovery` child run linked by `lineage.parentRunId`. It
   selects only unresolved request failures (timeouts, network, rate limits, selected
   5xx, invalid requests, unknown transport failures), never scored responses, and never
   authentication/configuration failures that require an operator fix. Selection is per
   evaluation: a fixture with one unresolved evaluation reissues only that evaluation,
   not every variant of the fixture. If nothing is unresolved it does nothing and reports
-  `run.nothing-to-do`.
+  `run.nothing-to-do`. With `--latest`, the source is the lineage tip, so a recovery that
+  leaves timeouts can be recovered again instead of dead-ending. Selecting an ancestor
+  explicitly while a descendant owns the unresolved work stays a no-op, but the result
+  names the owning run (`ownerRunId` in `run.nothing-to-do`, plus a stderr line) so the
+  operator can continue from it.
 - **Continuation scope and ownership.** A continuation's model files carry prior
   outcomes (so the child counts full plan progress) but record only the attempts that
   execution made; ancestor attempts stay in the ancestor run's files. The exported
   family billing ledger therefore sums each submitted request exactly once.
 - **`restart`** creates a new `restart` primary run covering the original fixture
   selection with the original frozen settings and capability snapshot. It becomes the
-  `--latest` primary; recovery children never do.
+  `--latest` primary for `restart`/`export`; recovery children never do.
 - **Lineage resolution** walks the whole recovery tree in creation order and takes the
   newest terminal record, while a scored response is never overwritten by a later
   failure. Repeated recovery therefore narrows to what is still unresolved.
@@ -233,9 +239,14 @@ layout, schema, and views.
 
 ## Selector rules
 
-- `--latest` selects the newest **primary** manifest by creation time in the configured
-  results root, with the run ID as the deterministic tie-breaker. Recovery children are
-  excluded.
+- `resume --latest` and `retry-failed --latest` first resolve the newest non-recovery
+  (primary or restart) manifest by creation time in the configured results root, with the
+  run ID as the deterministic tie-breaker, then continue from the **lineage tip**: the
+  newest run in that family's lineage by creation order, including recovery children.
+  Repeated recovery therefore keeps narrowing the same chain, carried prior outcomes come
+  from the run that owns the newest work, and the source that gets locked is the tip.
+- `restart --latest` and `export --latest` keep the primary-based rule: the newest
+  non-recovery manifest, excluding recovery children.
 - An explicit ID and `--latest` are mutually exclusive; supplying neither is a usage
   error.
 - Missing, corrupt, or unsupported-version manifests fail the command. The runner never

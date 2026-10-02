@@ -94,15 +94,20 @@ per-model records, atomic checkpoints, and a process lock.
 
 | Command | Behavior |
 | --- | --- |
-| `resume ID\|--latest` | Reissues pending, cancelled, and interrupted work; warns that an interrupted request has unknown upstream completion and can be billed again. Exhausted failures are not resumed. |
-| `retry-failed ID\|--latest` | Creates a linked recovery run for unresolved request failures only (never auth/config failures), scoped to the evaluations that still need them. No-op when nothing remains. |
+| `resume ID\|--latest` | Reissues pending, cancelled, and interrupted work; warns that an interrupted request has unknown upstream completion and can be billed again. Exhausted failures are not resumed. With `--latest`, continues from the lineage tip, including recovery children. |
+| `retry-failed ID\|--latest` | Creates a linked recovery run for unresolved request failures only (never auth/config failures), scoped to the evaluations that still need them. No-op when nothing remains. With `--latest`, recovers from the lineage tip, so a recovery that leaves failures can be recovered again. |
 | `restart ID\|--latest` | Creates a new primary run with the original fixture selection and frozen settings; the restart becomes `--latest`. |
 
 Frozen settings (dataset hash, model IDs, reasoning modes, rate-limit groups) are
 revalidated before any continuation; incompatibility stops the command instead of mutating
-the experiment. `--latest` selects the newest primary manifest by creation time, excluding
-recovery children. Continuation semantics, selector rules, and locking are documented in
-[`docs/runner.md`](./docs/runner.md).
+the experiment. For `resume` and `retry-failed`, `--latest` continues from the newest run
+in the newest family's lineage — the tip, including recovery children — so repeated
+recovery keeps narrowing the same chain; after a `retry-failed`, `resume --latest`
+continues from the recovery run rather than the primary. An explicit ancestor ID whose
+descendant owns the unresolved work still creates nothing, but the no-op names the owning
+run. `restart --latest` and `export --latest` keep the primary-based selector: the newest
+primary manifest by creation time, excluding recovery children. Continuation semantics,
+selector rules, and locking are documented in [`docs/runner.md`](./docs/runner.md).
 
 ## Publication and website
 

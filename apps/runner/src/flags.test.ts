@@ -4,7 +4,7 @@
  * gets its own tests rather than only being exercised through command tests.
  */
 import { describe, expect, it } from "vitest";
-import { describeFlags, flagsForCommand, parseFlags, RUN_FLAGS, SELECTOR_FLAGS } from "./flags";
+import { CONTINUATION_FLAGS, describeFlags, flagsForCommand, parseFlags, RUN_FLAGS } from "./flags";
 
 describe("parseFlags", () => {
   it("accepts long, short, and inline value forms", () => {
@@ -18,7 +18,7 @@ describe("parseFlags", () => {
   });
 
   it("collects booleans without consuming the next argument", () => {
-    const result = parseFlags(["--latest", "--force"], SELECTOR_FLAGS);
+    const result = parseFlags(["--latest", "--force"], CONTINUATION_FLAGS);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect([...result.flags.booleans].sort()).toEqual(["force", "latest"]);
@@ -26,7 +26,7 @@ describe("parseFlags", () => {
   });
 
   it("keeps positionals separate from flags", () => {
-    const result = parseFlags(["2026-09-23T00-00-00-000Z_abcdef01", "--force"], SELECTOR_FLAGS);
+    const result = parseFlags(["2026-09-23T00-00-00-000Z_abcdef01", "--force"], CONTINUATION_FLAGS);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.flags.positionals).toEqual(["2026-09-23T00-00-00-000Z_abcdef01"]);
@@ -44,7 +44,7 @@ describe("parseFlags", () => {
       ok: false,
       message: 'unknown option "frob"',
     });
-    expect(parseFlags(["--latest=yes"], SELECTOR_FLAGS)).toEqual({
+    expect(parseFlags(["--latest=yes"], CONTINUATION_FLAGS)).toEqual({
       ok: false,
       message: 'option "latest" does not take a value',
     });
@@ -69,6 +69,14 @@ describe("command flag surfaces", () => {
       expect(names).toContain("force");
     }
     expect(flagsForCommand("restart").map((flag) => flag.name)).not.toContain("set");
+  });
+
+  it("documents the command-specific --latest semantics", () => {
+    const continuation = describeFlags(flagsForCommand("retry-failed")).join("\n");
+    const restart = describeFlags(flagsForCommand("restart")).join("\n");
+    expect(continuation).toContain("lineage (the tip)");
+    expect(restart).toContain("newest primary");
+    expect(restart).not.toContain("lineage (the tip)");
   });
 
   it("documents every flag it accepts with correct short aliases", () => {

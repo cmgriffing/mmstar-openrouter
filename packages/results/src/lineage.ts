@@ -96,6 +96,25 @@ export function isRetryableFailureOutcome(outcome: OutcomeRecord): boolean {
   return RETRYABLE_FAILURE_CATEGORIES.includes(outcome.failure.category);
 }
 
+/**
+ * Entry-level counterpart of `isResumeCandidate` for lineage views. A lineage
+ * entry with state `indeterminate` always carries unknown upstream completion,
+ * so the state alone is the complete test.
+ */
+export function isResumeCandidateEntry(entry: LineageEntry): boolean {
+  return (
+    entry.state === "pending" || entry.state === "cancelled" || entry.state === "indeterminate"
+  );
+}
+
+/** Entry-level counterpart of `isRetryableFailureOutcome` for lineage views. */
+export function isRetryableFailureEntry(entry: LineageEntry): boolean {
+  if (entry.state === "indeterminate") return true;
+  if (entry.state !== "failed") return false;
+  if (entry.failure === null) return true;
+  return RETRYABLE_FAILURE_CATEGORIES.includes(entry.failure);
+}
+
 /** A terminal scored response resolves its fixture permanently. */
 export function isResolvedEntry(entry: LineageEntry): boolean {
   return entry.state === "settled" && entry.kind !== null;
@@ -162,6 +181,20 @@ export function resolveLineage(store: RunStore, root: RunManifest): LineageView 
   }
 
   return { root, runs, effective };
+}
+
+/**
+ * The newest run in a lineage view by creation order: the continuation tip.
+ * Recovery children can be the tip, which is what continuation `--latest`
+ * selects; `restart`/`export` keep the primary-based `resolveSelector`
+ * contract, so a restart is always the tip of its own family when present.
+ */
+export function lineageTip(view: LineageView): RunManifest {
+  let newest = view.root;
+  for (const run of view.runs) {
+    if (compareCreation(newest, run) < 0) newest = run;
+  }
+  return newest;
 }
 
 /** Find the effective record for one root-run outcome, if any descendant has one. */

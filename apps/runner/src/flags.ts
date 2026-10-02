@@ -50,18 +50,32 @@ export const RUN_FLAGS: readonly FlagSpec[] = [
   },
 ];
 
-export const SELECTOR_FLAGS: readonly FlagSpec[] = [
+const FORCE_FLAG: FlagSpec = {
+  name: "force",
+  kind: "boolean",
+  description: "reclaim a lock whose holder cannot be proven dead",
+};
+
+/** `resume` and `retry-failed`: `--latest` continues from the lineage tip. */
+export const CONTINUATION_FLAGS: readonly FlagSpec[] = [
   ...COMMON_FLAGS,
   {
     name: "latest",
     kind: "boolean",
-    description: "use the newest primary run in the results root",
+    description: "continue from the newest run in the newest family's lineage (the tip)",
   },
+  FORCE_FLAG,
+];
+
+/** `restart`: `--latest` keeps the primary-based selector contract. */
+export const RESTART_FLAGS: readonly FlagSpec[] = [
+  ...COMMON_FLAGS,
   {
-    name: "force",
+    name: "latest",
     kind: "boolean",
-    description: "reclaim a lock whose holder cannot be proven dead",
+    description: "restart the newest primary run in the results root",
   },
+  FORCE_FLAG,
 ];
 
 export const EXPORT_FLAGS: readonly FlagSpec[] = [
@@ -92,10 +106,10 @@ export function flagsForCommand(command: RunnerCommand): readonly FlagSpec[] {
     case "benchmark":
       return RUN_FLAGS;
     case "restart":
-      return [...COMMON_FLAGS, ...SELECTOR_FLAGS.filter((flag) => flag.name !== "config")];
+      return RESTART_FLAGS;
     case "resume":
     case "retry-failed":
-      return SELECTOR_FLAGS;
+      return CONTINUATION_FLAGS;
     case "export":
       return EXPORT_FLAGS;
   }

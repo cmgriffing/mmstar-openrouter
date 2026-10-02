@@ -76,7 +76,24 @@ export function formatCommandUsage(command: RunnerCommand): string {
     "Options:",
     ...describeFlags(flagsForCommand(command)),
     "",
-    "Run IDs are the directory names under the results root; use --latest to select",
-    "the newest primary run. Export writes publication/, which stays Git-ignored.",
+    "Run IDs are the directory names under the results root.",
+    ...selectorNote(command),
+    "Export writes publication/, which stays Git-ignored.",
   ].join("\n");
+}
+
+/** Per-command `--latest` documentation: continuation and primary selectors differ. */
+function selectorNote(command: RunnerCommand): string[] {
+  switch (command) {
+    case "resume":
+    case "retry-failed":
+      return ["--latest continues from the newest run in the newest family's lineage (the tip)."];
+    case "restart":
+      return ["--latest restarts the newest primary run in the results root."];
+    case "export":
+      return ["--latest exports the newest primary run's family."];
+    case "benchmark":
+    case "validate":
+      return [];
+  }
 }

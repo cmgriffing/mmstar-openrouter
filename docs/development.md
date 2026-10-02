@@ -41,9 +41,9 @@ stdout is a terminal and fall back to NDJSON when piped or given `--plain`:
 ```bash
 pnpm validate --set <name>           # validate config and expand a frozen plan
 pnpm benchmark --set <name>          # start a primary run (TUI on a TTY)
-pnpm resume --latest                 # continue pending/interrupted work
-pnpm retry-failed --latest           # linked recovery run for request failures
-pnpm restart --latest                # new primary run with the original selection
+pnpm resume --latest                 # continue pending/interrupted work from the lineage tip
+pnpm retry-failed --latest           # linked recovery run for request failures at the lineage tip
+pnpm restart --latest                # new primary run with the original selection (primary selector)
 pnpm export                          # publish every run as a validated SQLite artifact
 ```
 
