@@ -7,7 +7,7 @@
   "execution": {
     "maxConcurrentGroups": 4,
     "maxRetries": 3,
-    "requestTimeoutMs": 600000,
+    "requestTimeoutMs": 1200000,
     "maxRequestsPerMinute": null,
     "resultsRoot": "results"
   },
@@ -36,6 +36,47 @@
       "openRouterId": "xiaomi/mimo-v2.6-flash",
       "reasoningModes": "all",
       "rateLimitGroup": "mimo"
+    },
+    "gpt-6.1-sol": {
+      "openRouterId": "openai/gpt-6.1-sol",
+      "reasoningModes": ["low", "high", "max"],
+      "rateLimitGroup": "openai"
+    },
+
+    "claude-sonnet-5.5": {
+      "openRouterId": "anthropic/claude-sonnet-5.5",
+      "reasoningModes": ["low", "high", "max"],
+      "rateLimitGroup": "anthropic"
+    },
+
+    "gpt-6-luna": {
+      "openRouterId": "openai/gpt-6-luna",
+      "reasoningModes": ["low", "high", "max"],
+      "rateLimitGroup": "openai"
+    },
+
+    "claude-opus-5.5": {
+      "openRouterId": "anthropic/claude-opus-5.5",
+      "reasoningModes": ["low", "high", "max"],
+      "rateLimitGroup": "anthropic"
+    },
+
+    "muse-spark-1.3-contributor": {
+      "openRouterId": "meta/muse-spark-1.3-contributor",
+      "reasoningModes": ["low", "high", "max"],
+      "rateLimitGroup": "meta"
+    },
+
+    "gemini-3.8-flash": {
+      "openRouterId": "google/gemini-3.8-flash",
+      "reasoningModes": ["low", "medium", "high"],
+      "rateLimitGroup": "google"
+    },
+
+    "grok-4.7": {
+      "openRouterId": "x-ai/grok-4.7",
+      "reasoningModes": ["low", "medium", "high", "xhigh"],
+      "rateLimitGroup": "x-ai"
     }
   },
   "sets": {
@@ -46,6 +87,17 @@
         "glm-5.3-flash",
         "ternary-bonsai-2-27b",
         "mimo-v2.6-flash"
+      ]
+    },
+    "frontier-1": {
+      "models": [
+        "gpt-6-luna",
+        "gpt-6.1-sol",
+        "claude-sonnet-5.5",
+        "claude-opus-5.5",
+        "muse-spark-1.3-contributor",
+        "gemini-3.8-flash",
+        "grok-4.7"
       ]
     }
   }

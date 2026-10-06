@@ -4,11 +4,7 @@
   "description": "Versioned configuration for MMStar benchmark runs. Credentials never belong here; the runner reads OPENROUTER_API_KEY from the environment.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "version",
-    "models",
-    "sets"
-  ],
+  "required": ["version", "models", "sets"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -81,15 +77,12 @@
         "requestTimeoutMs": {
           "type": "integer",
           "minimum": 1000,
-          "maximum": 600000,
+          "maximum": 1200000,
           "default": 120000,
           "description": "Per-request timeout in milliseconds."
         },
         "maxRequestsPerMinute": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1,
           "maximum": 60000,
           "description": "Account-wide request cap, or null for no configured cap."
@@ -105,11 +98,7 @@
     "modelAlias": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "openRouterId",
-        "reasoningModes",
-        "rateLimitGroup"
-      ],
+      "required": ["openRouterId", "reasoningModes", "rateLimitGroup"],
       "properties": {
         "openRouterId": {
           "type": "string",
@@ -157,10 +146,7 @@
       "type": "object",
       "additionalProperties": false,
       "not": {
-        "required": [
-          "only",
-          "ignore"
-        ]
+        "required": ["only", "ignore"]
       },
       "properties": {
         "only": {
@@ -195,11 +181,7 @@
           "description": "Whether fallback providers may serve when preferred ones are unavailable."
         },
         "sort": {
-          "enum": [
-            "price",
-            "throughput",
-            "latency"
-          ],
+          "enum": ["price", "throughput", "latency"],
           "description": "Routing preference when several providers are eligible."
         }
       }
@@ -207,9 +189,7 @@
     "set": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "models"
-      ],
+      "required": ["models"],
       "properties": {
         "models": {
           "type": "array",

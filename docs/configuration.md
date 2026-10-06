@@ -20,36 +20,36 @@ path such as `models.gpt.reasoningModes[1]` and a stable code such as
 
 ## Fields
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `version` | yes | Configuration schema version; currently `1`. Other values are rejected. |
-| `$schema` | no | Editor schema reference, normally `"./mmstar.config.schema.json"`. |
-| `dataset` | no | `{ "path": "MMStar.tsv" }`; relative to the working directory. Defaults to `MMStar.tsv`. |
-| `execution` | no | Execution limits; see below. All fields default. |
-| `models` | yes | Named aliases; each expands into one evaluation per reasoning mode. |
-| `sets` | yes | Named ordered lists of aliases; `validate`/`benchmark --set <name>` selects one. |
+| Field       | Required | Meaning                                                                                  |
+| ----------- | -------- | ---------------------------------------------------------------------------------------- |
+| `version`   | yes      | Configuration schema version; currently `1`. Other values are rejected.                  |
+| `$schema`   | no       | Editor schema reference, normally `"./mmstar.config.schema.json"`.                       |
+| `dataset`   | no       | `{ "path": "MMStar.tsv" }`; relative to the working directory. Defaults to `MMStar.tsv`. |
+| `execution` | no       | Execution limits; see below. All fields default.                                         |
+| `models`    | yes      | Named aliases; each expands into one evaluation per reasoning mode.                      |
+| `sets`      | yes      | Named ordered lists of aliases; `validate`/`benchmark --set <name>` selects one.         |
 
 Unknown fields are rejected at every level, including inside `execution`, aliases, provider
 routing, and sets.
 
 ### `models.<alias>`
 
-| Field | Meaning |
-| --- | --- |
-| `openRouterId` | Fixed `vendor/model` ID, optionally with a `:free` suffix. Dynamic routers (`openrouter/auto`, `openrouter/free`) and variant suffixes (`:nitro`, `:floor`, `:online`, `:thinking`) are rejected: a fixed-model comparison must not substitute models at request time. |
-| `reasoningModes` | Ordered, unique modes; order determines evaluation order inside a set. |
-| `rateLimitGroup` | Required identifier shared by every alias limited by the same provider rate limit. One request is in flight per group at a time. |
-| `provider` | Optional routing restrictions (below). |
+| Field            | Meaning                                                                                                                                                                                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openRouterId`   | Fixed `vendor/model` ID, optionally with a `:free` suffix. Dynamic routers (`openrouter/auto`, `openrouter/free`) and variant suffixes (`:nitro`, `:floor`, `:online`, `:thinking`) are rejected: a fixed-model comparison must not substitute models at request time. |
+| `reasoningModes` | Ordered, unique modes; order determines evaluation order inside a set.                                                                                                                                                                                                 |
+| `rateLimitGroup` | Required identifier shared by every alias limited by the same provider rate limit. One request is in flight per group at a time.                                                                                                                                       |
+| `provider`       | Optional routing restrictions (below).                                                                                                                                                                                                                                 |
 
 ### `execution`
 
-| Field | Default | Bounds |
-| --- | --- | --- |
-| `maxConcurrentGroups` | `4` | 1–64 |
-| `maxRetries` | `3` | 0–10; retries **after** the initial attempt, so `3` allows at most four attempts per fixture per execution |
-| `requestTimeoutMs` | `120000` | 1000–600000 |
-| `maxRequestsPerMinute` | `null` (no configured cap) | 1–60000 when set; account-wide across groups |
-| `resultsRoot` | `"results"` | relative path without `..` segments |
+| Field                  | Default                    | Bounds                                                                                                     |
+| ---------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `maxConcurrentGroups`  | `4`                        | 1–64                                                                                                       |
+| `maxRetries`           | `3`                        | 0–10; retries **after** the initial attempt, so `3` allows at most four attempts per fixture per execution |
+| `requestTimeoutMs`     | `120000`                   | 1000–1200000                                                                                               |
+| `maxRequestsPerMinute` | `null` (no configured cap) | 1–60000 when set; account-wide across groups                                                               |
+| `resultsRoot`          | `"results"`                | relative path without `..` segments                                                                        |
 
 These are local policies, not provider guarantees. `dataset.path` and `execution.resultsRoot`
 must be relative and traversal-free so a config cannot read or write outside the workspace.
@@ -58,13 +58,13 @@ must be relative and traversal-free so a config cannot read or write outside the
 
 `provider` is passed through with `require_parameters: true` always set by the adapter:
 
-| Field | Meaning |
-| --- | --- |
-| `only` | Providers allowed to serve the model. Mutually exclusive with `ignore`. |
-| `ignore` | Providers excluded from serving the model. |
-| `order` | Preferred provider order. |
+| Field            | Meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `only`           | Providers allowed to serve the model. Mutually exclusive with `ignore`.   |
+| `ignore`         | Providers excluded from serving the model.                                |
+| `order`          | Preferred provider order.                                                 |
 | `allowFallbacks` | Whether fallback providers may serve when preferred ones are unavailable. |
-| `sort` | `price`, `throughput`, or `latency`. |
+| `sort`           | `price`, `throughput`, or `latency`.                                      |
 
 Declare shared provider limits in the same `rateLimitGroup`. Pin routing (`only`/`order`)
 when a stable provider comparison is required; when routing may vary, the runner records the
@@ -75,11 +75,11 @@ observed serving provider per attempt.
 Modes map to OpenRouter's `reasoning.effort` (current gateway values: `max`, `xhigh`, `high`,
 `medium`, `low`, `minimal`, `none`):
 
-| Mode | Upstream behavior |
-| --- | --- |
-| `default` | Omit the `reasoning` parameter entirely; the model/provider default applies. Not the same experiment as `none`. |
-| `none` | Explicitly request disabled reasoning. Invalid for models whose metadata marks reasoning as mandatory. |
-| `minimal` … `max` | Explicit effort level. |
+| Mode              | Upstream behavior                                                                                               |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `default`         | Omit the `reasoning` parameter entirely; the model/provider default applies. Not the same experiment as `none`. |
+| `none`            | Explicitly request disabled reasoning. Invalid for models whose metadata marks reasoning as mandatory.          |
+| `minimal` … `max` | Explicit effort level.                                                                                          |
 
 Preflight validates each configured mode against fresh model metadata before any request
 and fails closed for unknown explicit support instead of silently remapping effort:

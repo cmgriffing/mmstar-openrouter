@@ -91,7 +91,7 @@ export const RESULTS_ROOT_DEFAULT = "results";
 export const EXECUTION_LIMITS = {
   maxConcurrentGroups: { min: 1, max: 64, default: 4 },
   maxRetries: { min: 0, max: 10, default: 3 },
-  requestTimeoutMs: { min: 1_000, max: 600_000, default: 120_000 },
+  requestTimeoutMs: { min: 1_000, max: 1_200_000, default: 120_000 },
   maxRequestsPerMinute: { min: 1, max: 60_000, default: null },
 } as const;
 
@@ -112,12 +112,22 @@ export const MODEL_ID_REGEX =
 export const PROVIDER_SLUG_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Router aliases that substitute models at request time. */
-export const DYNAMIC_MODEL_IDS = ["openrouter/auto", "openrouter/free"] as const;
+export const DYNAMIC_MODEL_IDS = [
+  "openrouter/auto",
+  "openrouter/free",
+] as const;
 
 /** Model variant suffixes (`:nitro`, `:floor`, ...) that change routing or behavior. */
 export const MODEL_VARIANT_SEPARATOR = ":";
 
-const ROOT_KEYS = ["$schema", "version", "dataset", "execution", "models", "sets"] as const;
+const ROOT_KEYS = [
+  "$schema",
+  "version",
+  "dataset",
+  "execution",
+  "models",
+  "sets",
+] as const;
 const DATASET_KEYS = ["path"] as const;
 const EXECUTION_KEYS = [
   "maxConcurrentGroups",
@@ -126,8 +136,19 @@ const EXECUTION_KEYS = [
   "maxRequestsPerMinute",
   "resultsRoot",
 ] as const;
-const MODEL_KEYS = ["openRouterId", "reasoningModes", "rateLimitGroup", "provider"] as const;
-const PROVIDER_KEYS = ["only", "order", "ignore", "allowFallbacks", "sort"] as const;
+const MODEL_KEYS = [
+  "openRouterId",
+  "reasoningModes",
+  "rateLimitGroup",
+  "provider",
+] as const;
+const PROVIDER_KEYS = [
+  "only",
+  "order",
+  "ignore",
+  "allowFallbacks",
+  "sort",
+] as const;
 const SET_KEYS = ["models"] as const;
 
 export type ConfigParseResult =
@@ -154,7 +175,13 @@ export function parseMmstarConfigJson(text: string): ConfigParseResult {
     const detail = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      issues: [{ path: "", code: "invalid_json", message: `not valid JSON: ${detail}` }],
+      issues: [
+        {
+          path: "",
+          code: "invalid_json",
+          message: `not valid JSON: ${detail}`,
+        },
+      ],
     };
   }
   return parseMmstarConfig(parsed);
@@ -174,7 +201,12 @@ function indexAt(parent: string, index: number): string {
   return `${parent}[${index}]`;
 }
 
-function pushIssue(issues: ValidationIssue[], path: string, code: string, message: string): void {
+function pushIssue(
+  issues: ValidationIssue[],
+  path: string,
+  code: string,
+  message: string,
+): void {
   issues.push({ path, code, message });
 }
 
@@ -238,31 +270,60 @@ function readRelativePath(
   if (raw === undefined) return fallback;
   const fieldPath = at(path, key);
   if (typeof raw !== "string" || raw.trim() === "") {
-    pushIssue(issues, fieldPath, "invalid_path", "must be a non-empty relative path");
+    pushIssue(
+      issues,
+      fieldPath,
+      "invalid_path",
+      "must be a non-empty relative path",
+    );
     return fallback;
   }
   if (raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) {
-    pushIssue(issues, fieldPath, "invalid_path", "must be relative to the working directory");
+    pushIssue(
+      issues,
+      fieldPath,
+      "invalid_path",
+      "must be relative to the working directory",
+    );
     return fallback;
   }
   if (raw.split(/[\\/]/).some((segment) => segment === "..")) {
-    pushIssue(issues, fieldPath, "invalid_path", "must not contain '..' segments");
+    pushIssue(
+      issues,
+      fieldPath,
+      "invalid_path",
+      "must not contain '..' segments",
+    );
     return fallback;
   }
   return raw;
 }
 
-function validateDataset(value: unknown, issues: ValidationIssue[]): DatasetConfig {
+function validateDataset(
+  value: unknown,
+  issues: ValidationIssue[],
+): DatasetConfig {
   if (value === undefined) return { path: DATASET_PATH_DEFAULT };
   if (!isObject(value)) {
     pushIssue(issues, "dataset", "invalid_type", "must be an object");
     return { path: DATASET_PATH_DEFAULT };
   }
   checkUnknownKeys(value, DATASET_KEYS, "dataset", issues);
-  return { path: readRelativePath(value, "path", "dataset", DATASET_PATH_DEFAULT, issues) };
+  return {
+    path: readRelativePath(
+      value,
+      "path",
+      "dataset",
+      DATASET_PATH_DEFAULT,
+      issues,
+    ),
+  };
 }
 
-function validateExecution(value: unknown, issues: ValidationIssue[]): ExecutionConfig {
+function validateExecution(
+  value: unknown,
+  issues: ValidationIssue[],
+): ExecutionConfig {
   const execution: ExecutionConfig = { ...EXECUTION_DEFAULTS };
   if (value === undefined) return execution;
   if (!isObject(value)) {
@@ -280,8 +341,13 @@ function validateExecution(value: unknown, issues: ValidationIssue[]): Execution
       issues,
     ) ?? EXECUTION_DEFAULTS.maxConcurrentGroups;
   execution.maxRetries =
-    readBoundedInteger(value, "maxRetries", "execution", EXECUTION_LIMITS.maxRetries, issues) ??
-    EXECUTION_DEFAULTS.maxRetries;
+    readBoundedInteger(
+      value,
+      "maxRetries",
+      "execution",
+      EXECUTION_LIMITS.maxRetries,
+      issues,
+    ) ?? EXECUTION_DEFAULTS.maxRetries;
   execution.requestTimeoutMs =
     readBoundedInteger(
       value,
@@ -396,7 +462,12 @@ function validateProvider(
     if (raw === undefined) continue;
     const listPath = at(path, listKey);
     if (!Array.isArray(raw)) {
-      pushIssue(issues, listPath, "invalid_type", "must be an array of provider slugs");
+      pushIssue(
+        issues,
+        listPath,
+        "invalid_type",
+        "must be an array of provider slugs",
+      );
       continue;
     }
     const slugs: string[] = [];
@@ -413,7 +484,12 @@ function validateProvider(
         return;
       }
       if (seen.has(entry)) {
-        pushIssue(issues, entryPath, "duplicate_provider", `duplicate provider "${entry}"`);
+        pushIssue(
+          issues,
+          entryPath,
+          "duplicate_provider",
+          `duplicate provider "${entry}"`,
+        );
         return;
       }
       seen.add(entry);
@@ -433,7 +509,12 @@ function validateProvider(
 
   if (value.allowFallbacks !== undefined) {
     if (typeof value.allowFallbacks !== "boolean") {
-      pushIssue(issues, at(path, "allowFallbacks"), "invalid_type", "must be a boolean");
+      pushIssue(
+        issues,
+        at(path, "allowFallbacks"),
+        "invalid_type",
+        "must be a boolean",
+      );
     } else {
       provider.allowFallbacks = value.allowFallbacks;
     }
@@ -472,7 +553,11 @@ function validateModelId(
     );
     return undefined;
   }
-  if ((DYNAMIC_MODEL_IDS as readonly string[]).includes(value.split(":")[0] ?? value)) {
+  if (
+    (DYNAMIC_MODEL_IDS as readonly string[]).includes(
+      value.split(":")[0] ?? value,
+    )
+  ) {
     pushIssue(
       issues,
       path,
@@ -513,7 +598,11 @@ function validateAlias(
   }
   checkUnknownKeys(value, MODEL_KEYS, path, issues);
 
-  const openRouterId = validateModelId(value.openRouterId, at(path, "openRouterId"), issues);
+  const openRouterId = validateModelId(
+    value.openRouterId,
+    at(path, "openRouterId"),
+    issues,
+  );
   const reasoningModes = validateReasoningModes(
     value.reasoningModes,
     at(path, "reasoningModes"),
@@ -533,10 +622,19 @@ function validateAlias(
     rateLimitGroup = rawGroup;
   }
 
-  const provider = validateProvider(value.provider, at(path, "provider"), issues);
+  const provider = validateProvider(
+    value.provider,
+    at(path, "provider"),
+    issues,
+  );
 
-  const invalidModes = reasoningModes !== REASONING_ALL && reasoningModes.length === 0;
-  if (openRouterId === undefined || rateLimitGroup === undefined || invalidModes) {
+  const invalidModes =
+    reasoningModes !== REASONING_ALL && reasoningModes.length === 0;
+  if (
+    openRouterId === undefined ||
+    rateLimitGroup === undefined ||
+    invalidModes
+  ) {
     return undefined;
   }
   return provider === undefined
@@ -550,12 +648,22 @@ function validateModels(
 ): Record<string, ModelAliasConfig> {
   const models: Record<string, ModelAliasConfig> = {};
   if (!isObject(value)) {
-    pushIssue(issues, "models", "invalid_type", "must be an object of model aliases");
+    pushIssue(
+      issues,
+      "models",
+      "invalid_type",
+      "must be an object of model aliases",
+    );
     return models;
   }
   const names = Object.keys(value);
   if (names.length === 0) {
-    pushIssue(issues, "models", "empty_list", "must define at least one model alias");
+    pushIssue(
+      issues,
+      "models",
+      "empty_list",
+      "must define at least one model alias",
+    );
     return models;
   }
   for (const name of names) {
@@ -582,23 +690,43 @@ function validateSets(
 ): Record<string, ModelSetConfig> {
   const sets: Record<string, ModelSetConfig> = {};
   if (!isObject(value)) {
-    pushIssue(issues, "sets", "invalid_type", "must be an object of named sets");
+    pushIssue(
+      issues,
+      "sets",
+      "invalid_type",
+      "must be an object of named sets",
+    );
     return sets;
   }
   const names = Object.keys(value);
   if (names.length === 0) {
-    pushIssue(issues, "sets", "empty_list", "must define at least one named set");
+    pushIssue(
+      issues,
+      "sets",
+      "empty_list",
+      "must define at least one named set",
+    );
     return sets;
   }
   for (const name of names) {
     const path = at("sets", name);
     if (!IDENTIFIER_REGEX.test(name)) {
-      pushIssue(issues, path, "invalid_set_name", "set names must be valid identifiers");
+      pushIssue(
+        issues,
+        path,
+        "invalid_set_name",
+        "set names must be valid identifiers",
+      );
       continue;
     }
     const raw = value[name];
     if (!isObject(raw)) {
-      pushIssue(issues, path, "invalid_type", "must be an object with a models array");
+      pushIssue(
+        issues,
+        path,
+        "invalid_type",
+        "must be an object with a models array",
+      );
       continue;
     }
     checkUnknownKeys(raw, SET_KEYS, path, issues);
@@ -617,11 +745,21 @@ function validateSets(
     rawModels.forEach((entry, index) => {
       const entryPath = indexAt(at(path, "models"), index);
       if (typeof entry !== "string") {
-        pushIssue(issues, entryPath, "invalid_alias_reference", "must be a model alias name");
+        pushIssue(
+          issues,
+          entryPath,
+          "invalid_alias_reference",
+          "must be a model alias name",
+        );
         return;
       }
       if (seen.has(entry)) {
-        pushIssue(issues, entryPath, "duplicate_alias_reference", `duplicate alias "${entry}"`);
+        pushIssue(
+          issues,
+          entryPath,
+          "duplicate_alias_reference",
+          `duplicate alias "${entry}"`,
+        );
         return;
       }
       seen.add(entry);
@@ -641,7 +779,10 @@ function validateSets(
   return sets;
 }
 
-function validateConfigDocument(input: unknown, issues: ValidationIssue[]): MmstarConfig {
+function validateConfigDocument(
+  input: unknown,
+  issues: ValidationIssue[],
+): MmstarConfig {
   const config: MmstarConfig = {
     version: CONFIG_VERSION,
     dataset: { path: DATASET_PATH_DEFAULT },
@@ -651,7 +792,12 @@ function validateConfigDocument(input: unknown, issues: ValidationIssue[]): Mmst
   };
 
   if (!isObject(input)) {
-    pushIssue(issues, "", "invalid_type", "configuration root must be a JSON object");
+    pushIssue(
+      issues,
+      "",
+      "invalid_type",
+      "configuration root must be a JSON object",
+    );
     return config;
   }
 
@@ -675,7 +821,12 @@ function validateConfigDocument(input: unknown, issues: ValidationIssue[]): Mmst
 
   if (input.$schema !== undefined) {
     if (typeof input.$schema !== "string" || input.$schema.trim() === "") {
-      pushIssue(issues, "$schema", "invalid_type", "must be a non-empty string when present");
+      pushIssue(
+        issues,
+        "$schema",
+        "invalid_type",
+        "must be a non-empty string when present",
+      );
     } else {
       config.$schema = input.$schema;
     }
@@ -684,7 +835,11 @@ function validateConfigDocument(input: unknown, issues: ValidationIssue[]): Mmst
   config.dataset = validateDataset(input.dataset, issues);
   config.execution = validateExecution(input.execution, issues);
   config.models = validateModels(input.models, issues);
-  config.sets = validateSets(input.sets, isObject(input.models) ? input.models : {}, issues);
+  config.sets = validateSets(
+    input.sets,
+    isObject(input.models) ? input.models : {},
+    issues,
+  );
 
   return config;
 }

@@ -7,10 +7,20 @@
  * needs a crash, the durable files are edited directly, which is exactly what a
  * process killed between two file replacements leaves behind.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CompletionProvider, NormalizedCompletion, ProviderResult } from "@mmstar/benchmark";
+import type {
+  CompletionProvider,
+  NormalizedCompletion,
+  ProviderResult,
+} from "@mmstar/benchmark";
 import {
   InflightMarkerWriter,
   openSqliteDatabase,
@@ -30,7 +40,8 @@ const JPEG = [
   "/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==",
 ].join("");
 
-const TSV_HEADER = "index\tquestion\tanswer\tcategory\tl2_category\tbench\timage";
+const TSV_HEADER =
+  "index\tquestion\tanswer\tcategory\tl2_category\tbench\timage";
 
 interface FixtureSpec {
   index: number;
@@ -40,8 +51,18 @@ interface FixtureSpec {
 }
 
 const FIXTURES: FixtureSpec[] = [
-  { index: 0, question: "Which color is the sky?\nA) red B) blue", answer: "B", category: "color" },
-  { index: 1, question: "How many legs does a cat have?", answer: "A", category: "animals" },
+  {
+    index: 0,
+    question: "Which color is the sky?\nA) red B) blue",
+    answer: "B",
+    category: "color",
+  },
+  {
+    index: 1,
+    question: "How many legs does a cat have?",
+    answer: "A",
+    category: "animals",
+  },
 ];
 
 function buildTsv(): string {
@@ -65,8 +86,16 @@ function buildConfig(): string {
         resultsRoot: "results",
       },
       models: {
-        alpha: { openRouterId: "vendor/alpha", reasoningModes: ["default"], rateLimitGroup: "g1" },
-        beta: { openRouterId: "vendor/beta", reasoningModes: ["default"], rateLimitGroup: "g2" },
+        alpha: {
+          openRouterId: "vendor/alpha",
+          reasoningModes: ["default"],
+          rateLimitGroup: "g1",
+        },
+        beta: {
+          openRouterId: "vendor/beta",
+          reasoningModes: ["default"],
+          rateLimitGroup: "g2",
+        },
       },
       sets: {
         demo: { models: ["alpha", "beta"] },
@@ -137,7 +166,12 @@ function success(text: string): ProviderResult<NormalizedCompletion> {
       upstreamProvider: "test-provider",
       finishReason: "stop",
       responseText: text,
-      usage: { promptTokens: 10, completionTokens: 1, totalTokens: 11, reasoningTokens: null },
+      usage: {
+        promptTokens: 10,
+        completionTokens: 1,
+        totalTokens: 11,
+        reasoningTokens: null,
+      },
       cost: { kind: "reported", usd: 0.001 },
       rawResponse: { id: "test-response" },
     },
@@ -165,10 +199,9 @@ function lastRunId(harnessRef: Harness): string {
 }
 
 function readManifest(harnessRef: Harness, runId: string) {
-  return JSON.parse(readFileSync(harnessRef.store.paths(runId).manifestFile, "utf8")) as Record<
-    string,
-    unknown
-  >;
+  return JSON.parse(
+    readFileSync(harnessRef.store.paths(runId).manifestFile, "utf8"),
+  ) as Record<string, unknown>;
 }
 
 function allOutcomes(harnessRef: Harness, runId: string) {
@@ -195,7 +228,9 @@ describe("run command (5.1, 5.2)", () => {
       const result = await execute({ mode: "run", set: "demo" }, h.context);
       expect(result.exitCode).not.toBe(0);
       const outcomes = allOutcomes(h, lastRunId(h));
-      expect(outcomes.some((outcome) => outcome.failure === "configuration")).toBe(true);
+      expect(
+        outcomes.some((outcome) => outcome.failure === "configuration"),
+      ).toBe(true);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -222,12 +257,20 @@ describe("run command (5.1, 5.2)", () => {
         .readModelRecords(lastRunId(h))
         .flatMap((file) => file.evaluations)
         .flatMap((evaluation) => evaluation.outcomes);
-      expect(records.map((record) => record.failure)).toEqual([null, null, null, null]);
+      expect(records.map((record) => record.failure)).toEqual([
+        null,
+        null,
+        null,
+        null,
+      ]);
       expect(records.every((record) => record.state === "settled")).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(4);
       expect(fetchMock).toHaveBeenCalledWith(
         "https://openrouter.ai/api/v1/chat/completions",
-        expect.objectContaining({ method: "POST", signal: expect.any(AbortSignal) }),
+        expect.objectContaining({
+          method: "POST",
+          signal: expect.any(AbortSignal),
+        }),
       );
     } finally {
       vi.unstubAllGlobals();
@@ -244,28 +287,48 @@ describe("run command (5.1, 5.2)", () => {
       const runId = lastRunId(h);
       const manifest = readManifest(h, runId);
       expect(manifest.lifecycle).toMatchObject({ state: "completed" });
-      expect((manifest.plan as { evaluations: unknown[] }).evaluations).toHaveLength(2);
       expect(
-        (manifest.configuration as { execution: { maxRetries: number } }).execution.maxRetries,
+        (manifest.plan as { evaluations: unknown[] }).evaluations,
+      ).toHaveLength(2);
+      expect(
+        (manifest.configuration as { execution: { maxRetries: number } })
+          .execution.maxRetries,
       ).toBe(1);
-      expect(manifest.code).toMatchObject({ revision: "test-revision", dirty: true });
+      expect(manifest.code).toMatchObject({
+        revision: "test-revision",
+        dirty: true,
+      });
 
       const outcomes = allOutcomes(h, runId);
       expect(outcomes).toHaveLength(4); // 2 evaluations x 2 fixtures
-      expect(outcomes.every((outcome) => outcome.state === "settled")).toBe(true);
+      expect(outcomes.every((outcome) => outcome.state === "settled")).toBe(
+        true,
+      );
       // Fixture 0 expects B and fixture 1 expects A.
       const fixture0 = outcomes.filter((outcome) => outcome.fixtureId === "0");
-      expect(fixture0.every((outcome) => outcome.kind === "correct")).toBe(true);
+      expect(fixture0.every((outcome) => outcome.kind === "correct")).toBe(
+        true,
+      );
 
       const stored = h.store.readModelRecords(runId);
-      expect(stored.map((file) => file.modelAlias).sort()).toEqual(["alpha", "beta"]);
+      expect(stored.map((file) => file.modelAlias).sort()).toEqual([
+        "alpha",
+        "beta",
+      ]);
       expect(
-        stored.flatMap((file) => file.evaluations).flatMap((evaluation) => evaluation.attempts),
+        stored
+          .flatMap((file) => file.evaluations)
+          .flatMap((evaluation) => evaluation.attempts),
       ).toHaveLength(4);
 
       // The run finished event carries the durable counts.
       const finished = h.events.find((event) => event.event === "run.finished");
-      expect(finished).toMatchObject({ state: "completed", settled: 4, total: 4, remaining: 0 });
+      expect(finished).toMatchObject({
+        state: "completed",
+        settled: 4,
+        total: 4,
+        remaining: 0,
+      });
     } finally {
       h.cleanup();
     }
@@ -344,7 +407,12 @@ describe("run command (5.1, 5.2)", () => {
 
       const result = await execute({ mode: "run", set: "demo" }, h.context);
       expect(result.exitCode).toBe(0);
-      expect(durableStates).toEqual(["settled", "settled", "settled", "settled"]);
+      expect(durableStates).toEqual([
+        "settled",
+        "settled",
+        "settled",
+        "settled",
+      ]);
       expect(durableLifecycle).toBe("completed");
     } finally {
       h.cleanup();
@@ -360,7 +428,9 @@ describe("run command (5.1, 5.2)", () => {
           resolve();
           return;
         }
-        control.signal.addEventListener("abort", () => resolve(), { once: true });
+        control.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
       });
       return {
         ok: false,
@@ -402,7 +472,9 @@ describe("run command (5.1, 5.2)", () => {
       expect(result.exitCode).toBe(130);
       const finished = h.events.find((event) => event.event === "run.finished");
       expect(finished?.state).toBe("stopped");
-      expect(h.events.some((event) => event.event === "engine.stop-requested")).toBe(true);
+      expect(
+        h.events.some((event) => event.event === "engine.stop-requested"),
+      ).toBe(true);
       // Shutdown checkpoints leave the cancelled work durable and resumable.
       const runId = lastRunId(h);
       const manifest = readManifest(h, runId);
@@ -429,11 +501,19 @@ describe("run command (5.1, 5.2)", () => {
     try {
       await execute({ mode: "run", set: "demo" }, h.context);
       const runId = lastRunId(h);
-      writeFileSync(join(h.dir, "fixtures.tsv"), buildTsv().replace("sky", "ocean"));
+      writeFileSync(
+        join(h.dir, "fixtures.tsv"),
+        buildTsv().replace("sky", "ocean"),
+      );
 
-      const resumed = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const resumed = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(resumed.exitCode).toBe(1);
-      expect(h.events.some((event) => event.kind === "DatasetChangedError")).toBe(true);
+      expect(
+        h.events.some((event) => event.kind === "DatasetChangedError"),
+      ).toBe(true);
     } finally {
       h.cleanup();
     }
@@ -453,7 +533,9 @@ describe("abortable loading (3.2)", () => {
       const result = await promise;
       expect(result.exitCode).toBe(130);
       expect(h.store.listRunIds()).toEqual([]);
-      expect(h.events.filter((event) => event.event === "run.created")).toHaveLength(0);
+      expect(
+        h.events.filter((event) => event.event === "run.created"),
+      ).toHaveLength(0);
     } finally {
       h.cleanup();
     }
@@ -516,7 +598,10 @@ describe("resume (5.3)", () => {
       expect(dropped?.fixtureId).toBe("1");
       writeFileSync(modelPath, JSON.stringify(alpha));
 
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
 
       const resumedId = lastRunId(h);
@@ -529,8 +614,12 @@ describe("resume (5.3)", () => {
       const original = allOutcomes(h, runId);
       const recovered = allOutcomes(h, resumedId);
       expect(recovered).toHaveLength(4);
-      expect(recovered.filter((outcome) => outcome.fixtureId === "1").length).toBe(2);
-      expect(original.filter((outcome) => outcome.fixtureId === "1").length).toBe(1);
+      expect(
+        recovered.filter((outcome) => outcome.fixtureId === "1").length,
+      ).toBe(2);
+      expect(
+        original.filter((outcome) => outcome.fixtureId === "1").length,
+      ).toBe(1);
     } finally {
       h.cleanup();
     }
@@ -556,9 +645,11 @@ describe("resume (5.3)", () => {
         }[];
       };
       const evaluation = alpha.evaluations[0];
-      if (evaluation === undefined) throw new Error("model file has no evaluation");
+      if (evaluation === undefined)
+        throw new Error("model file has no evaluation");
       const startedAttempt = evaluation.attempts[0];
-      if (startedAttempt === undefined) throw new Error("model file has no attempt");
+      if (startedAttempt === undefined)
+        throw new Error("model file has no attempt");
       startedAttempt.state = "submitted";
       startedAttempt.finishedAt = null;
       const pending = {
@@ -583,15 +674,24 @@ describe("resume (5.3)", () => {
       writeFileSync(modelPath, JSON.stringify(alpha));
 
       h.context.provider = answerWith("B");
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
 
       const resumedId = lastRunId(h);
-      const reconciled = h.store.readModelRecords(resumedId).flatMap((file) => file.evaluations);
-      const alphaEvaluation = reconciled.find((record) => record.evaluationId === "alpha::default");
-      expect(alphaEvaluation?.outcomes.filter((outcome) => outcome.fixtureId === "0")).toHaveLength(
-        1,
+      const reconciled = h.store
+        .readModelRecords(resumedId)
+        .flatMap((file) => file.evaluations);
+      const alphaEvaluation = reconciled.find(
+        (record) => record.evaluationId === "alpha::default",
       );
+      expect(
+        alphaEvaluation?.outcomes.filter(
+          (outcome) => outcome.fixtureId === "0",
+        ),
+      ).toHaveLength(1);
 
       // The interrupted attempt stays in the run that made it...
       const sourceEvaluation = h.store
@@ -601,7 +701,10 @@ describe("resume (5.3)", () => {
       const sourceAttempt = sourceEvaluation?.attempts.find(
         (attempt) => attempt.attemptId === startedAttempt.attemptId,
       );
-      expect(sourceAttempt).toMatchObject({ state: "submitted", finishedAt: null });
+      expect(sourceAttempt).toMatchObject({
+        state: "submitted",
+        finishedAt: null,
+      });
 
       // ...and the child records its own fresh attempt, with the same
       // deterministic attempt ID. Carrying the parent's attempt instead would
@@ -664,10 +767,15 @@ describe("resume (5.3)", () => {
       });
 
       h.context.provider = answerWith("B");
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
 
-      const disclosure = h.events.find((event) => event.event === "run.indeterminate-disclosure");
+      const disclosure = h.events.find(
+        (event) => event.event === "run.indeterminate-disclosure",
+      );
       expect(disclosure?.indeterminateCount).toBe(1);
       expect(h.stderr.join("")).toContain("unknown upstream completion");
     } finally {
@@ -693,11 +801,17 @@ describe("resume (5.3)", () => {
         }[];
       };
       const evaluation = alpha.evaluations[0];
-      const outcome = evaluation?.outcomes.find((entry) => entry.fixtureId === "0");
+      const outcome = evaluation?.outcomes.find(
+        (entry) => entry.fixtureId === "0",
+      );
       const attempt = evaluation?.attempts.find(
         (entry) => entry.fixtureId === "0" && entry.attemptNumber === 1,
       );
-      if (evaluation === undefined || outcome === undefined || attempt === undefined) {
+      if (
+        evaluation === undefined ||
+        outcome === undefined ||
+        attempt === undefined
+      ) {
         throw new Error("model file has no fixture 0 records");
       }
       attempt.state = "failed";
@@ -708,7 +822,13 @@ describe("resume (5.3)", () => {
         retryAfterMs: null,
       };
       evaluation.outcomes = [
-        { ...outcome, state: "pending", kind: null, indeterminate: false, failure: null },
+        {
+          ...outcome,
+          state: "pending",
+          kind: null,
+          indeterminate: false,
+          failure: null,
+        },
       ];
       writeFileSync(modelPath, JSON.stringify(alpha));
 
@@ -724,9 +844,16 @@ describe("resume (5.3)", () => {
         submittedAt: new Date(T0).toISOString(),
       });
 
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
-      expect(h.events.some((event) => event.event === "run.indeterminate-disclosure")).toBe(false);
+      expect(
+        h.events.some(
+          (event) => event.event === "run.indeterminate-disclosure",
+        ),
+      ).toBe(false);
       expect(h.stderr.join("")).not.toContain("unknown upstream completion");
     } finally {
       h.cleanup();
@@ -740,10 +867,15 @@ describe("resume (5.3)", () => {
       const runId = lastRunId(h);
       const before = h.store.listRunIds().length;
 
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
       expect(h.store.listRunIds()).toHaveLength(before);
-      expect(h.events.some((event) => event.event === "run.nothing-to-do")).toBe(true);
+      expect(
+        h.events.some((event) => event.event === "run.nothing-to-do"),
+      ).toBe(true);
     } finally {
       h.cleanup();
     }
@@ -762,7 +894,10 @@ describe("resume (5.3)", () => {
       expect(indeterminate.length).toBeGreaterThan(0);
 
       h.context.provider = answerWith("B");
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
       expect(h.stderr.join("")).toContain("unknown upstream completion");
     } finally {
@@ -787,7 +922,9 @@ describe("retry-failed (5.4)", () => {
       await execute({ mode: "run", set: "demo" }, h.context);
       const primaryId = lastRunId(h);
       expect(
-        allOutcomes(h, primaryId).filter((outcome) => outcome.state !== "settled").length,
+        allOutcomes(h, primaryId).filter(
+          (outcome) => outcome.state !== "settled",
+        ).length,
       ).toBe(4);
 
       const recovered = await execute(
@@ -805,8 +942,14 @@ describe("retry-failed (5.4)", () => {
       // run is untouched.
       const recoveredOutcomes = allOutcomes(h, recoveryId);
       expect(recoveredOutcomes).toHaveLength(4);
-      expect(recoveredOutcomes.every((outcome) => outcome.state === "settled")).toBe(true);
-      expect(allOutcomes(h, primaryId).every((outcome) => outcome.state !== "settled")).toBe(true);
+      expect(
+        recoveredOutcomes.every((outcome) => outcome.state === "settled"),
+      ).toBe(true);
+      expect(
+        allOutcomes(h, primaryId).every(
+          (outcome) => outcome.state !== "settled",
+        ),
+      ).toBe(true);
 
       // Selecting the primary again resolves the whole lineage: nothing left.
       const again = await execute(
@@ -814,9 +957,13 @@ describe("retry-failed (5.4)", () => {
         h.context,
       );
       expect(again.exitCode).toBe(0);
-      expect(h.events.filter((event) => event.event === "run.nothing-to-do")).toHaveLength(1);
+      expect(
+        h.events.filter((event) => event.event === "run.nothing-to-do"),
+      ).toHaveLength(1);
       expect(h.store.listRunIds().length).toBe(2);
-      const noop = h.events.find((event) => event.event === "run.nothing-to-do");
+      const noop = h.events.find(
+        (event) => event.event === "run.nothing-to-do",
+      );
       expect(noop?.reason).toBe("no unresolved request failures remain");
       expect(noop?.ownerRunId).toBeUndefined();
     } finally {
@@ -830,17 +977,26 @@ describe("retry-failed (5.4)", () => {
       await execute({ mode: "run", set: "demo" }, h.context);
       const runId = lastRunId(h);
       const outcomes = allOutcomes(h, runId);
-      expect(outcomes.every((outcome) => outcome.kind === "incorrect")).toBe(true);
+      expect(outcomes.every((outcome) => outcome.kind === "incorrect")).toBe(
+        true,
+      );
 
       const attempts = h.store
         .readModelRecords(runId)
         .flatMap((file) => file.evaluations)
         .flatMap((evaluation) => evaluation.attempts);
-      expect(attempts.every((attempt) => attempt.attemptNumber === 1)).toBe(true);
+      expect(attempts.every((attempt) => attempt.attemptNumber === 1)).toBe(
+        true,
+      );
 
-      const result = await execute({ mode: "retry-failed", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "retry-failed", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
-      expect(h.events.some((event) => event.event === "run.nothing-to-do")).toBe(true);
+      expect(
+        h.events.some((event) => event.event === "run.nothing-to-do"),
+      ).toBe(true);
     } finally {
       h.cleanup();
     }
@@ -851,7 +1007,8 @@ describe("retry-failed (5.4)", () => {
       provider: async (payload) => {
         const part = payload.messages[0]?.content[0];
         const text = part?.type === "text" ? part.text : "";
-        if (text.includes("sky") && payload.model === "vendor/alpha") return failure("network");
+        if (text.includes("sky") && payload.model === "vendor/alpha")
+          return failure("network");
         return success(text.includes("sky") ? "B" : "A");
       },
     });
@@ -884,8 +1041,12 @@ describe("retry-failed (5.4)", () => {
         .readModelRecords(recoveryId)
         .flatMap((file) => file.evaluations)
         .flatMap((evaluation) => evaluation.attempts);
-      expect(attempts.map((attempt) => attempt.evaluationId)).toEqual(["alpha::default"]);
-      expect(h.store.readManifest(recoveryId).lineage.recoveredFixtureIds).toEqual(["0"]);
+      expect(attempts.map((attempt) => attempt.evaluationId)).toEqual([
+        "alpha::default",
+      ]);
+      expect(
+        h.store.readManifest(recoveryId).lineage.recoveredFixtureIds,
+      ).toEqual(["0"]);
     } finally {
       h.cleanup();
     }
@@ -912,7 +1073,9 @@ describe("continuation tip", () => {
     );
     expect(result.exitCode).toBe(0);
     const recoveryId = lastRunId(h);
-    expect(h.store.readManifest(recoveryId).lineage.parentRunId).toBe(primaryId);
+    expect(h.store.readManifest(recoveryId).lineage.parentRunId).toBe(
+      primaryId,
+    );
     return { primaryId, recoveryId };
   }
 
@@ -938,9 +1101,13 @@ describe("continuation tip", () => {
       expect(child.lineage.parentRunId).toBe(recoveryId);
       // Only the still-timed-out fixture is reissued; fixture 0 was resolved.
       expect(child.lineage.recoveredFixtureIds).toEqual(["1"]);
-      expect(allOutcomes(h, childId).every((outcome) => outcome.state === "settled")).toBe(true);
       expect(
-        h.events.slice(eventsBefore).some((event) => event.event === "run.nothing-to-do"),
+        allOutcomes(h, childId).every((outcome) => outcome.state === "settled"),
+      ).toBe(true);
+      expect(
+        h.events
+          .slice(eventsBefore)
+          .some((event) => event.event === "run.nothing-to-do"),
       ).toBe(false);
     } finally {
       h.cleanup();
@@ -973,7 +1140,11 @@ describe("continuation tip", () => {
       // Fixture 1 x both evaluations: exactly the indeterminate work reissued.
       expect(disclosure?.indeterminateCount).toBe(2);
       expect(h.stderr.join("")).toContain("unknown upstream completion");
-      expect(allOutcomes(h, resumedId).every((outcome) => outcome.state === "settled")).toBe(true);
+      expect(
+        allOutcomes(h, resumedId).every(
+          (outcome) => outcome.state === "settled",
+        ),
+      ).toBe(true);
     } finally {
       h.cleanup();
     }
@@ -1033,11 +1204,17 @@ describe("restart (5.4)", () => {
       await execute({ mode: "run", set: "demo" }, h.context);
       const originalId = lastRunId(h);
 
-      const result = await execute({ mode: "restart", selector: { runId: originalId } }, h.context);
+      const result = await execute(
+        { mode: "restart", selector: { runId: originalId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
       const restartedId = lastRunId(h);
       const restarted = h.store.readManifest(restartedId);
-      expect(restarted.lineage).toMatchObject({ kind: "restart", parentRunId: originalId });
+      expect(restarted.lineage).toMatchObject({
+        kind: "restart",
+        parentRunId: originalId,
+      });
       expect(restarted.plan.dataset.fixtureIds).toEqual(["0", "1"]);
 
       // Latest must now select the restart, not the older primary.
@@ -1059,7 +1236,10 @@ describe("selection and locking errors (5.5)", () => {
       expect(requestFromArgs("resume", ["id", "--latest"]).ok).toBe(false);
       expect(requestFromArgs("resume", ["a", "b"]).ok).toBe(false);
 
-      const result = await execute({ mode: "resume", selector: { runId: "missing" } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId: "missing" } },
+        h.context,
+      );
       expect(result.exitCode).toBe(1);
       expect(h.store.listRunIds()).toEqual([]);
     } finally {
@@ -1075,9 +1255,14 @@ describe("selection and locking errors (5.5)", () => {
       const runsBefore = h.store.listRunIds().length;
 
       const held = h.store.acquireLock(runId);
-      const locked = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const locked = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(locked.exitCode).toBe(1);
-      expect(h.events.some((event) => event.kind === "RunLockedError")).toBe(true);
+      expect(h.events.some((event) => event.kind === "RunLockedError")).toBe(
+        true,
+      );
       // The lock was respected: resume neither created a run nor submitted work.
       expect(h.store.listRunIds()).toHaveLength(runsBefore);
       held.release();
@@ -1093,9 +1278,14 @@ describe("selection and locking errors (5.5)", () => {
       const runId = lastRunId(h);
       writeFileSync(h.store.paths(runId).manifestFile, "{ broken");
 
-      const corrupt = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const corrupt = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(corrupt.exitCode).toBe(1);
-      expect(h.events.some((event) => event.kind === "RunCorruptError")).toBe(true);
+      expect(h.events.some((event) => event.kind === "RunCorruptError")).toBe(
+        true,
+      );
     } finally {
       h.cleanup();
     }
@@ -1112,7 +1302,10 @@ describe("selection and locking errors (5.5)", () => {
     try {
       await execute({ mode: "run", set: "demo" }, h.context);
       const primaryId = lastRunId(h);
-      await execute({ mode: "retry-failed", selector: { runId: primaryId } }, h.context);
+      await execute(
+        { mode: "retry-failed", selector: { runId: primaryId } },
+        h.context,
+      );
       expect(h.store.resolveSelector({ latest: true }).runId).toBe(primaryId);
     } finally {
       h.cleanup();
@@ -1127,7 +1320,8 @@ describe("validate command", () => {
       const result = await executeValidate(h.context, { preflight: false });
       expect(result.exitCode).toBe(0);
       const ok = h.events.find((event) => event.event === "validate.ok");
-      if (ok === undefined) throw new Error("validate did not emit a summary event");
+      if (ok === undefined)
+        throw new Error("validate did not emit a summary event");
       expect((ok.dataset as { fixtures: number }).fixtures).toBe(2);
       expect((ok.sets as unknown[]).length).toBe(1);
       expect(h.store.listRunIds()).toEqual([]);
@@ -1139,10 +1333,15 @@ describe("validate command", () => {
   it("reports an invalid config as a validation error", async () => {
     const h = harness();
     try {
-      writeFileSync(join(h.dir, "mmstar.config.json"), JSON.stringify({ version: 2 }));
+      writeFileSync(
+        join(h.dir, "mmstar.config.json"),
+        JSON.stringify({ version: 2 }),
+      );
       const result = await executeValidate(h.context, { preflight: false });
       expect(result.exitCode).toBe(2);
-      expect(h.events.some((event) => event.kind === "ValidationError")).toBe(true);
+      expect(h.events.some((event) => event.kind === "ValidationError")).toBe(
+        true,
+      );
     } finally {
       h.cleanup();
     }
@@ -1151,7 +1350,15 @@ describe("validate command", () => {
 
 /** Reasoning-mode expansion (7.1-7.4 of the allow-all-effort change). */
 describe("reasoningModes all", () => {
-  const ALL_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const ALL_EFFORTS = [
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ];
 
   function buildAllConfig(): string {
     return `${JSON.stringify(
@@ -1166,7 +1373,11 @@ describe("reasoningModes all", () => {
           resultsRoot: "results",
         },
         models: {
-          alpha: { openRouterId: "vendor/alpha", reasoningModes: "all", rateLimitGroup: "g1" },
+          alpha: {
+            openRouterId: "vendor/alpha",
+            reasoningModes: "all",
+            rateLimitGroup: "g1",
+          },
         },
         sets: { demo: { models: ["alpha"] } },
       },
@@ -1175,7 +1386,9 @@ describe("reasoningModes all", () => {
     )}\n`;
   }
 
-  function catalogModel(reasoning: Record<string, unknown>): Record<string, unknown> {
+  function catalogModel(
+    reasoning: Record<string, unknown>,
+  ): Record<string, unknown> {
     return {
       id: "vendor/alpha",
       name: "Alpha",
@@ -1184,7 +1397,9 @@ describe("reasoningModes all", () => {
     };
   }
 
-  function stubModelsFetch(data: readonly Record<string, unknown>[]): ReturnType<typeof vi.fn> {
+  function stubModelsFetch(
+    data: readonly Record<string, unknown>[],
+  ): ReturnType<typeof vi.fn> {
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).endsWith("/models")) return Response.json({ data });
       throw new Error(`unexpected request ${url}`);
@@ -1199,22 +1414,28 @@ describe("reasoningModes all", () => {
     h.context.apiKey = "test-only-key";
     writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
     const fetchMock = stubModelsFetch([
-      catalogModel({ supported_efforts: ["high", "low", "none"], mandatory: false }),
+      catalogModel({
+        supported_efforts: ["high", "low", "none"],
+        mandatory: false,
+      }),
     ]);
     try {
       const result = await execute({ mode: "run", set: "demo" }, h.context);
       expect(result.exitCode).toBe(0);
       const manifest = readManifest(h, lastRunId(h));
-      const evaluations = (manifest.plan as { evaluations: { evaluationId: string }[] })
-        .evaluations;
+      const evaluations = (
+        manifest.plan as { evaluations: { evaluationId: string }[] }
+      ).evaluations;
       expect(evaluations.map((evaluation) => evaluation.evaluationId)).toEqual([
         "alpha::none",
         "alpha::low",
         "alpha::high",
       ]);
-      expect(evaluations.every((evaluation) => !evaluation.evaluationId.endsWith("::all"))).toBe(
-        true,
-      );
+      expect(
+        evaluations.every(
+          (evaluation) => !evaluation.evaluationId.endsWith("::all"),
+        ),
+      ).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
         "https://openrouter.ai/api/v1/models",
@@ -1231,7 +1452,9 @@ describe("reasoningModes all", () => {
     h.context.skipPreflight = false;
     h.context.apiKey = "test-only-key";
     writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
-    stubModelsFetch([{ ...catalogModel({ supported_efforts: null }), id: "vendor/other" }]);
+    stubModelsFetch([
+      { ...catalogModel({ supported_efforts: null }), id: "vendor/other" },
+    ]);
     try {
       const result = await execute({ mode: "run", set: "demo" }, h.context);
       expect(result.exitCode).toBe(2);
@@ -1251,12 +1474,15 @@ describe("reasoningModes all", () => {
       const result = await execute({ mode: "run", set: "demo" }, h.context);
       expect(result.exitCode).toBe(0);
       const manifest = readManifest(h, lastRunId(h));
-      const evaluations = (manifest.plan as { evaluations: { evaluationId: string }[] })
-        .evaluations;
+      const evaluations = (
+        manifest.plan as { evaluations: { evaluationId: string }[] }
+      ).evaluations;
       expect(evaluations.map((evaluation) => evaluation.evaluationId)).toEqual(
         ALL_EFFORTS.map((effort) => `alpha::${effort}`),
       );
-      expect(h.stderr.some((line) => line.includes("--skip-preflight"))).toBe(true);
+      expect(h.stderr.some((line) => line.includes("--skip-preflight"))).toBe(
+        true,
+      );
     } finally {
       h.cleanup();
     }
@@ -1277,7 +1503,9 @@ describe("reasoningModes all", () => {
       expect(restarted.exitCode).toBe(0);
       expect(h.store.listRunIds()).toHaveLength(2);
       const manifest = readManifest(h, lastRunId(h));
-      expect((manifest.plan as { evaluations: unknown[] }).evaluations).toHaveLength(7);
+      expect(
+        (manifest.plan as { evaluations: unknown[] }).evaluations,
+      ).toHaveLength(7);
     } finally {
       h.cleanup();
     }
@@ -1303,12 +1531,16 @@ describe("reasoningModes all", () => {
         calls += 1;
         return success("B");
       };
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(0);
       expect(calls).toBe(1);
       const childId = lastRunId(h);
       expect(
-        (readManifest(h, childId).plan as { evaluations: unknown[] }).evaluations,
+        (readManifest(h, childId).plan as { evaluations: unknown[] })
+          .evaluations,
       ).toHaveLength(7);
       expect(allOutcomes(h, childId)).toHaveLength(14);
     } finally {
@@ -1324,7 +1556,9 @@ describe("reasoningModes all", () => {
       const runId = lastRunId(h);
       const manifestPath = h.store.paths(runId).manifestFile;
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-        plan: { evaluations: { evaluationId: string; reasoningMode: string }[] };
+        plan: {
+          evaluations: { evaluationId: string; reasoningMode: string }[];
+        };
       };
       manifest.plan.evaluations = [
         {
@@ -1335,7 +1569,10 @@ describe("reasoningModes all", () => {
       ];
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(2);
       const error = h.events.find((event) => event.kind === "ValidationError");
       expect(String(error?.message)).toContain('unresolved mode "all"');
@@ -1367,15 +1604,23 @@ describe("reasoningModes all", () => {
     h.context.apiKey = "test-only-key";
     writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
     stubModelsFetch([
-      catalogModel({ supported_efforts: ["high", "low", "none"], mandatory: false }),
+      catalogModel({
+        supported_efforts: ["high", "low", "none"],
+        mandatory: false,
+      }),
     ]);
     try {
       const result = await executeValidate(h.context, { preflight: false });
       expect(result.exitCode).toBe(0);
       const ok = h.events.find((event) => event.event === "validate.ok");
-      if (ok === undefined) throw new Error("validate did not emit a summary event");
+      if (ok === undefined)
+        throw new Error("validate did not emit a summary event");
       const sets = ok.sets as { models: string[] }[];
-      expect(sets[0]?.models).toEqual(["alpha::none", "alpha::low", "alpha::high"]);
+      expect(sets[0]?.models).toEqual([
+        "alpha::none",
+        "alpha::low",
+        "alpha::high",
+      ]);
       const preflight = ok.preflight as { status: string };
       expect(preflight.status).toBe("ok");
       expect(h.store.listRunIds()).toEqual([]);
@@ -1389,7 +1634,9 @@ describe("reasoningModes all", () => {
     const h = harness();
     h.context.apiKey = "test-only-key";
     writeFileSync(join(h.dir, "mmstar.config.json"), buildAllConfig());
-    stubModelsFetch([catalogModel({ supported_efforts: ["none", "low"], mandatory: true })]);
+    stubModelsFetch([
+      catalogModel({ supported_efforts: ["none", "low"], mandatory: true }),
+    ]);
     try {
       const result = await executeValidate(h.context, { preflight: false });
       expect(result.exitCode).toBe(2);
@@ -1423,8 +1670,16 @@ describe("hardening boundaries (11.2)", () => {
             reasoningModes: ["default"],
             rateLimitGroup: "g1",
           },
-          beta: { openRouterId: "vendor/beta", reasoningModes: ["default"], rateLimitGroup: "g2" },
-          gamma: { openRouterId: "vendor/gamma", reasoningModes: ["none"], rateLimitGroup: "g3" },
+          beta: {
+            openRouterId: "vendor/beta",
+            reasoningModes: ["default"],
+            rateLimitGroup: "g2",
+          },
+          gamma: {
+            openRouterId: "vendor/gamma",
+            reasoningModes: ["none"],
+            rateLimitGroup: "g3",
+          },
         },
         sets: { demo: { models: ["alpha", "beta", "gamma"] } },
       },
@@ -1446,14 +1701,22 @@ describe("hardening boundaries (11.2)", () => {
       expect(result.exitCode).toBe(1);
 
       const runId = lastRunId(h);
-      expect(readManifest(h, runId).lifecycle).toMatchObject({ state: "failed" });
+      expect(readManifest(h, runId).lifecycle).toMatchObject({
+        state: "failed",
+      });
       const finished = h.events.find((event) => event.event === "run.finished");
       expect(finished?.halt).not.toBeNull();
 
       const outcomes = allOutcomes(h, runId);
-      expect(outcomes.filter((outcome) => outcome.state === "failed")).toHaveLength(1);
-      expect(outcomes.find((outcome) => outcome.state === "failed")?.failure).toBe("auth");
-      expect(outcomes.some((outcome) => outcome.state === "pending")).toBe(true);
+      expect(
+        outcomes.filter((outcome) => outcome.state === "failed"),
+      ).toHaveLength(1);
+      expect(
+        outcomes.find((outcome) => outcome.state === "failed")?.failure,
+      ).toBe("auth");
+      expect(outcomes.some((outcome) => outcome.state === "pending")).toBe(
+        true,
+      );
       const authAttempts = h.store
         .readModelRecords(runId)
         .flatMap((file) => file.evaluations)
@@ -1462,23 +1725,38 @@ describe("hardening boundaries (11.2)", () => {
       expect(authAttempts).toHaveLength(1);
 
       // An operator must fix credentials first; retry-failed must not reissue it.
-      const retry = await execute({ mode: "retry-failed", selector: { runId } }, h.context);
+      const retry = await execute(
+        { mode: "retry-failed", selector: { runId } },
+        h.context,
+      );
       expect(retry.exitCode).toBe(0);
-      expect(h.events.some((event) => event.event === "run.nothing-to-do")).toBe(true);
+      expect(
+        h.events.some((event) => event.event === "run.nothing-to-do"),
+      ).toBe(true);
       expect(h.store.listRunIds()).toHaveLength(1);
 
       // The halted family still exports: a partial run is publishable evidence.
       const outDir = join(h.dir, "publication");
-      const exported = await executeExport(h.context, { latest: true, all: false, outDir });
+      const exported = await executeExport(h.context, {
+        latest: true,
+        all: false,
+        outDir,
+      });
       expect(exported.exitCode).toBe(0);
       verifyPublication(outDir);
-      const database = openSqliteDatabase(join(outDir, "benchmark.sqlite"), { readOnly: true });
+      const database = openSqliteDatabase(join(outDir, "benchmark.sqlite"), {
+        readOnly: true,
+      });
       try {
         const row = database
-          .prepare("SELECT COUNT(*) AS n FROM outcomes WHERE failure_category = 'auth'")
+          .prepare(
+            "SELECT COUNT(*) AS n FROM outcomes WHERE failure_category = 'auth'",
+          )
           .get();
         expect(Number(row?.n)).toBe(1);
-        const attempts = database.prepare("SELECT COUNT(*) AS n FROM attempts").get();
+        const attempts = database
+          .prepare("SELECT COUNT(*) AS n FROM attempts")
+          .get();
         expect(Number(attempts?.n)).toBeGreaterThanOrEqual(1);
       } finally {
         database.close();
@@ -1495,13 +1773,21 @@ describe("hardening boundaries (11.2)", () => {
       const runId = lastRunId(h);
       const runsBefore = h.store.listRunIds().length;
 
-      writeFileSync(join(h.store.paths(runId).modelsDir, "alpha.json"), "{ broken");
+      writeFileSync(
+        join(h.store.paths(runId).modelsDir, "alpha.json"),
+        "{ broken",
+      );
       h.context.provider = async () => {
         throw new Error("provider must not be called for a corrupt run");
       };
-      const result = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const result = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(result.exitCode).toBe(1);
-      expect(h.events.some((event) => event.kind === "RunCorruptError")).toBe(true);
+      expect(h.events.some((event) => event.kind === "RunCorruptError")).toBe(
+        true,
+      );
       expect(h.store.listRunIds()).toHaveLength(runsBefore);
     } finally {
       h.cleanup();
@@ -1511,7 +1797,10 @@ describe("hardening boundaries (11.2)", () => {
   it("rejects a continuation when frozen capabilities no longer support the plan", async () => {
     const h = harness();
     try {
-      writeFileSync(join(h.dir, "mmstar.config.json"), buildReasoningNoneConfig());
+      writeFileSync(
+        join(h.dir, "mmstar.config.json"),
+        buildReasoningNoneConfig(),
+      );
       const first = await execute({ mode: "run", set: "demo" }, h.context);
       expect(first.exitCode).toBe(0);
       const runId = lastRunId(h);
@@ -1528,8 +1817,11 @@ describe("hardening boundaries (11.2)", () => {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
         capabilities: { modelId: string; reasoning: { mandatory: boolean } }[];
       };
-      const gamma = manifest.capabilities.find((item) => item.modelId === "vendor/gamma");
-      if (gamma === undefined) throw new Error("gamma capability snapshot missing");
+      const gamma = manifest.capabilities.find(
+        (item) => item.modelId === "vendor/gamma",
+      );
+      if (gamma === undefined)
+        throw new Error("gamma capability snapshot missing");
       gamma.reasoning.mandatory = true;
       writeFileSync(manifestPath, JSON.stringify(manifest));
 
@@ -1538,9 +1830,14 @@ describe("hardening boundaries (11.2)", () => {
         calls += 1;
         return success("B");
       };
-      const resumed = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const resumed = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(resumed.exitCode).toBe(2);
-      expect(h.events.some((event) => event.kind === "ValidationError")).toBe(true);
+      expect(h.events.some((event) => event.kind === "ValidationError")).toBe(
+        true,
+      );
       expect(calls).toBe(0);
       expect(h.store.listRunIds()).toHaveLength(1);
     } finally {
@@ -1559,7 +1856,7 @@ describe("rate-limit halt recovery", () => {
           category: "rate_limit",
           message: "slow down",
           httpStatus: 429,
-          retryAfterMs: 600_000,
+          retryAfterMs: 1_200_000,
         },
         rawResponse: null,
       }),
@@ -1568,20 +1865,31 @@ describe("rate-limit halt recovery", () => {
       const halted = await execute({ mode: "run", set: "demo" }, h.context);
       expect(halted.exitCode).toBe(1);
       const runId = lastRunId(h);
-      expect(readManifest(h, runId).lifecycle).toMatchObject({ state: "failed" });
+      expect(readManifest(h, runId).lifecycle).toMatchObject({
+        state: "failed",
+      });
       const finished = h.events.find((event) => event.event === "run.finished");
       expect(finished?.halt).toMatchObject({ category: "rate_limit" });
       // The failed attempt is durable while every outcome stays pending: no
       // fixture is scored as failed by a cooldown the operator can outlast.
-      expect(allOutcomes(h, runId).every((outcome) => outcome.state === "pending")).toBe(true);
+      expect(
+        allOutcomes(h, runId).every((outcome) => outcome.state === "pending"),
+      ).toBe(true);
 
       // The reset passes; resume reissues the pending work from the frozen plan.
       h.context.provider = answerWith("B");
-      const resumed = await execute({ mode: "resume", selector: { runId } }, h.context);
+      const resumed = await execute(
+        { mode: "resume", selector: { runId } },
+        h.context,
+      );
       expect(resumed.exitCode).toBe(0);
       const childId = lastRunId(h);
-      expect(readManifest(h, childId).lifecycle).toMatchObject({ state: "completed" });
-      expect(allOutcomes(h, childId).every((outcome) => outcome.state === "settled")).toBe(true);
+      expect(readManifest(h, childId).lifecycle).toMatchObject({
+        state: "completed",
+      });
+      expect(
+        allOutcomes(h, childId).every((outcome) => outcome.state === "settled"),
+      ).toBe(true);
     } finally {
       h.cleanup();
     }

@@ -47,7 +47,10 @@ class TestClock implements EngineClock {
   /** Advance to the earliest pending sleep and resolve every waiter due. */
   advanceToNext(): boolean {
     if (this.waiters.length === 0) return false;
-    const next = this.waiters.reduce((min, waiter) => Math.min(min, waiter.at), Number.MAX_VALUE);
+    const next = this.waiters.reduce(
+      (min, waiter) => Math.min(min, waiter.at),
+      Number.MAX_VALUE,
+    );
     this.current = Math.max(this.current, next);
     const due = this.waiters.filter((waiter) => waiter.at <= this.current);
     this.waiters = this.waiters.filter((waiter) => waiter.at > this.current);
@@ -60,7 +63,10 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function driveRun(clock: TestClock, run: Promise<EngineRunResult>): Promise<EngineRunResult> {
+async function driveRun(
+  clock: TestClock,
+  run: Promise<EngineRunResult>,
+): Promise<EngineRunResult> {
   let done = false;
   run.then(
     () => {
@@ -87,7 +93,10 @@ interface RecordedCall {
 function makeProvider(options: {
   clock: TestClock;
   latencyMs?: number;
-  respond: (call: RecordedCall, index: number) => ProviderResult<NormalizedCompletion>;
+  respond: (
+    call: RecordedCall,
+    index: number,
+  ) => ProviderResult<NormalizedCompletion>;
 }): { provider: CompletionProvider; calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
   const provider: CompletionProvider = async (payload, control) => {
@@ -107,7 +116,10 @@ function makeProvider(options: {
   return { provider, calls };
 }
 
-function ok(text: string, finishReason = "stop"): ProviderResult<NormalizedCompletion> {
+function ok(
+  text: string,
+  finishReason = "stop",
+): ProviderResult<NormalizedCompletion> {
   return {
     ok: true,
     value: {
@@ -116,7 +128,12 @@ function ok(text: string, finishReason = "stop"): ProviderResult<NormalizedCompl
       upstreamProvider: "provider-x",
       finishReason,
       responseText: text,
-      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, reasoningTokens: null },
+      usage: {
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+        reasoningTokens: null,
+      },
       cost: { kind: "reported", usd: 0.001 },
       rawResponse: null,
     },
@@ -165,7 +182,11 @@ function evaluation(
   };
 }
 
-function fixture(id: string, expectedAnswer = "A", category = "math"): EngineFixture {
+function fixture(
+  id: string,
+  expectedAnswer = "A",
+  category = "math",
+): EngineFixture {
   return {
     fixtureId: id,
     category,
@@ -201,7 +222,10 @@ function harness(options: {
   evaluations: PreflightEvaluation[];
   fixtures: ReturnType<typeof fixture>[];
   execution?: Partial<ExecutionConfig>;
-  respond: (call: RecordedCall, index: number) => ProviderResult<NormalizedCompletion>;
+  respond: (
+    call: RecordedCall,
+    index: number,
+  ) => ProviderResult<NormalizedCompletion>;
   latencyMs?: number;
   random?: () => number;
   beforeSubmitAttempt?: BenchmarkEngineOptions["beforeSubmitAttempt"];
@@ -210,7 +234,9 @@ function harness(options: {
   const events: EngineEvent[] = [];
   const { provider, calls } = makeProvider({
     clock,
-    ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
+    ...(options.latencyMs === undefined
+      ? {}
+      : { latencyMs: options.latencyMs }),
     respond: options.respond,
   });
   const engine = new BenchmarkEngine({
@@ -226,15 +252,27 @@ function harness(options: {
       : { beforeSubmitAttempt: options.beforeSubmitAttempt }),
     sink: (event) => events.push(event),
   });
-  return { engine, clock, calls, events, run: () => driveRun(clock, engine.run()) };
+  return {
+    engine,
+    clock,
+    calls,
+    events,
+    run: () => driveRun(clock, engine.run()),
+  };
 }
 
 /** Maximum simultaneous calls, optionally filtered; intervals are half-open. */
-function maxConcurrent(calls: RecordedCall[], filter?: (call: RecordedCall) => boolean): number {
+function maxConcurrent(
+  calls: RecordedCall[],
+  filter?: (call: RecordedCall) => boolean,
+): number {
   const events: { at: number; delta: number }[] = [];
   for (const call of calls) {
     if (filter !== undefined && !filter(call)) continue;
-    events.push({ at: call.startedAt, delta: 1 }, { at: call.finishedAt, delta: -1 });
+    events.push(
+      { at: call.startedAt, delta: 1 },
+      { at: call.finishedAt, delta: -1 },
+    );
   }
   events.sort((a, b) => a.at - b.at || a.delta - b.delta);
   let active = 0;
@@ -250,8 +288,14 @@ function groupOf(model: string): string {
   return model.replace("vendor/", "");
 }
 
-function outcomeFor(result: EngineRunResult, evaluationId: string, fixtureId: string) {
-  const record = result.evaluations.find((entry) => entry.evaluationId === evaluationId);
+function outcomeFor(
+  result: EngineRunResult,
+  evaluationId: string,
+  fixtureId: string,
+) {
+  const record = result.evaluations.find(
+    (entry) => entry.evaluationId === evaluationId,
+  );
   return record?.outcomes.find((outcome) => outcome.fixtureId === fixtureId);
 }
 
@@ -286,10 +330,14 @@ describe("BenchmarkEngine scheduling", () => {
 
     const result = await h.run();
 
-    const inGroup = h.calls.filter((call) => call.payload.model.startsWith("vendor/"));
+    const inGroup = h.calls.filter((call) =>
+      call.payload.model.startsWith("vendor/"),
+    );
     expect(inGroup).toHaveLength(6);
     expect(maxConcurrent(inGroup)).toBe(1);
-    expect(h.calls.map((call) => call.payload.messages[0]?.content[0])).toMatchObject([
+    expect(
+      h.calls.map((call) => call.payload.messages[0]?.content[0]),
+    ).toMatchObject([
       { text: expect.stringContaining("Question 0?") },
       { text: expect.stringContaining("Question 1?") },
       { text: expect.stringContaining("Question 2?") },
@@ -303,7 +351,10 @@ describe("BenchmarkEngine scheduling", () => {
   it("scopes fixtures to the evaluations that selected them", async () => {
     const h = harness({
       evaluations: [evaluation("a", "shared"), evaluation("b", "shared")],
-      fixtures: [fixture("0"), { ...fixture("1"), evaluationIds: ["b::default"] }],
+      fixtures: [
+        fixture("0"),
+        { ...fixture("1"), evaluationIds: ["b::default"] },
+      ],
       respond: () => ok("A"),
     });
 
@@ -317,13 +368,19 @@ describe("BenchmarkEngine scheduling", () => {
       const part = call.payload.messages[0]?.content[0];
       return part?.type === "text" ? part.text : "";
     });
-    expect(callTexts.filter((text) => text.includes("Question 1?"))).toHaveLength(1);
+    expect(
+      callTexts.filter((text) => text.includes("Question 1?")),
+    ).toHaveLength(1);
     expect(outcomeFor(result, "b::default", "1")?.state).toBe("settled");
   });
 
   it("shares a 429 cooldown across every model in the group while independent groups progress", async () => {
     const h = harness({
-      evaluations: [evaluation("a", "shared"), evaluation("b", "shared"), evaluation("c", "g2")],
+      evaluations: [
+        evaluation("a", "shared"),
+        evaluation("b", "shared"),
+        evaluation("c", "g2"),
+      ],
       fixtures: [fixture("0"), fixture("1"), fixture("2")],
       execution: { maxConcurrentGroups: 2 },
       latencyMs: 10,
@@ -337,14 +394,20 @@ describe("BenchmarkEngine scheduling", () => {
 
     const result = await h.run();
 
-    const sharedCalls = h.calls.filter((call) => groupOf(call.payload.model) !== "c");
+    const sharedCalls = h.calls.filter(
+      (call) => groupOf(call.payload.model) !== "c",
+    );
     const firstFailureAt = sharedCalls[0]?.finishedAt ?? 0;
     // The whole group waits: no shared-group request starts during the cooldown.
     const sharedDuringCooldown = sharedCalls.filter(
-      (call) => call.startedAt > firstFailureAt && call.startedAt < firstFailureAt + 1000,
+      (call) =>
+        call.startedAt > firstFailureAt &&
+        call.startedAt < firstFailureAt + 1000,
     );
     expect(sharedDuringCooldown).toHaveLength(0);
-    expect((sharedCalls[1]?.startedAt ?? 0) - firstFailureAt).toBeGreaterThanOrEqual(1000);
+    expect(
+      (sharedCalls[1]?.startedAt ?? 0) - firstFailureAt,
+    ).toBeGreaterThanOrEqual(1000);
 
     // The independent group keeps progressing while the shared group cools down.
     const independentDuringCooldown = h.calls.filter(
@@ -355,9 +418,16 @@ describe("BenchmarkEngine scheduling", () => {
     );
     expect(independentDuringCooldown.length).toBeGreaterThan(0);
 
-    const cooldownStarted = h.events.find((event) => event.type === "group.cooldown.started");
-    expect(cooldownStarted).toMatchObject({ group: "shared", reason: "rate_limit" });
-    expect(h.events.some((event) => event.type === "group.cooldown.ended")).toBe(true);
+    const cooldownStarted = h.events.find(
+      (event) => event.type === "group.cooldown.started",
+    );
+    expect(cooldownStarted).toMatchObject({
+      group: "shared",
+      reason: "rate_limit",
+    });
+    expect(
+      h.events.some((event) => event.type === "group.cooldown.ended"),
+    ).toBe(true);
     expect(result.state).toBe("completed");
   });
 
@@ -375,16 +445,20 @@ describe("BenchmarkEngine scheduling", () => {
     expect(h.calls).toHaveLength(4);
     for (const call of h.calls) {
       const inWindow = h.calls.filter(
-        (other) => other.startedAt > call.startedAt - 60_000 && other.startedAt <= call.startedAt,
+        (other) =>
+          other.startedAt > call.startedAt - 60_000 &&
+          other.startedAt <= call.startedAt,
       );
       expect(inWindow.length).toBeLessThanOrEqual(2);
     }
-    expect((h.calls[2]?.startedAt ?? 0) - (h.calls[0]?.startedAt ?? 0)).toBeGreaterThanOrEqual(
-      60_000,
-    );
+    expect(
+      (h.calls[2]?.startedAt ?? 0) - (h.calls[0]?.startedAt ?? 0),
+    ).toBeGreaterThanOrEqual(60_000);
     expect(
       h.events.some(
-        (event) => event.type === "group.cooldown.started" && event.reason === "request_cap",
+        (event) =>
+          event.type === "group.cooldown.started" &&
+          event.reason === "request_cap",
       ),
     ).toBe(true);
     expect(result.state).toBe("completed");
@@ -401,14 +475,18 @@ describe("BenchmarkEngine events", () => {
 
     await h.run();
 
-    expect(h.events.find((event) => event.type === "evaluation.started")).toMatchObject({
+    expect(
+      h.events.find((event) => event.type === "evaluation.started"),
+    ).toMatchObject({
       evaluationId: "alpha::high",
       modelAlias: "alpha",
       openRouterId: "vendor/alpha",
       reasoningMode: "high",
       rateLimitGroup: "group-a",
     });
-    expect(h.events.find((event) => event.type === "attempt.finished")).toMatchObject({
+    expect(
+      h.events.find((event) => event.type === "attempt.finished"),
+    ).toMatchObject({
       modelUsed: "vendor/x",
       upstreamProvider: "provider-x",
     });
@@ -416,15 +494,22 @@ describe("BenchmarkEngine events", () => {
 
   it("lists planned evaluations with scoped fixture counts on run.started", async () => {
     const h = harness({
-      evaluations: [evaluation("alpha", "group-a"), evaluation("beta", "group-b")],
-      fixtures: [{ ...fixture("0"), evaluationIds: ["alpha::default"] }, fixture("1")],
+      evaluations: [
+        evaluation("alpha", "group-a"),
+        evaluation("beta", "group-b"),
+      ],
+      fixtures: [
+        { ...fixture("0"), evaluationIds: ["alpha::default"] },
+        fixture("1"),
+      ],
       respond: () => ok("A"),
     });
 
     await h.run();
 
     const started = h.events.find((event) => event.type === "run.started");
-    if (started?.type !== "run.started") throw new Error("no run.started event");
+    if (started?.type !== "run.started")
+      throw new Error("no run.started event");
     expect(started.totalEvaluations).toBe(2);
     expect(started.totalFixtures).toBe(2);
     expect(started.evaluations).toEqual([
@@ -456,7 +541,9 @@ describe("BenchmarkEngine events", () => {
 
     await h.run();
 
-    const finished = h.events.filter((event) => event.type === "attempt.finished");
+    const finished = h.events.filter(
+      (event) => event.type === "attempt.finished",
+    );
     expect(finished.length).toBeGreaterThan(0);
     for (const event of finished) {
       expect(event).toMatchObject({ modelUsed: null, upstreamProvider: null });
@@ -475,14 +562,21 @@ describe("BenchmarkEngine events", () => {
 
     await h.run();
 
-    const finished = h.events.filter((event) => event.type === "attempt.finished");
+    const finished = h.events.filter(
+      (event) => event.type === "attempt.finished",
+    );
     expect(finished).toHaveLength(2);
     const first = finished[0];
     const second = finished[1];
-    if (first?.type !== "attempt.finished" || second?.type !== "attempt.finished") {
+    if (
+      first?.type !== "attempt.finished" ||
+      second?.type !== "attempt.finished"
+    ) {
       throw new Error("expected attempt.finished events");
     }
-    expect(first.retryAt).toBe(new Date(T0 + 10 + 250 + 0.5 * (1_000 - 250)).toISOString());
+    expect(first.retryAt).toBe(
+      new Date(T0 + 10 + 250 + 0.5 * (1_000 - 250)).toISOString(),
+    );
     expect(second.retryAt).toBeNull();
   });
 
@@ -554,7 +648,10 @@ describe("BenchmarkEngine events", () => {
 
   it("stops and drains every in-flight group when one item's submission hook rejects", async () => {
     const h = harness({
-      evaluations: [evaluation("alpha", "group-a"), evaluation("beta", "group-b")],
+      evaluations: [
+        evaluation("alpha", "group-a"),
+        evaluation("beta", "group-b"),
+      ],
       fixtures: [fixture("0")],
       // Both groups launch together and stay in flight until the clock advances,
       // so the alpha rejection lands while beta's request is open.
@@ -575,10 +672,15 @@ describe("BenchmarkEngine events", () => {
     expect(h.calls).toHaveLength(1);
     const cancelled = h.events.find(
       (event): event is Extract<EngineEvent, { type: "attempt.finished" }> =>
-        event.type === "attempt.finished" && event.evaluationId.startsWith("beta::"),
+        event.type === "attempt.finished" &&
+        event.evaluationId.startsWith("beta::"),
     );
     expect(cancelled?.state).toBe("cancelled");
-    expect(h.events.some((e) => e.type === "engine.stopping" && e.reason === "error")).toBe(true);
+    expect(
+      h.events.some(
+        (e) => e.type === "engine.stopping" && e.reason === "error",
+      ),
+    ).toBe(true);
     expect(h.engine.state).toBe("stopped");
   });
 });
@@ -603,7 +705,9 @@ describe("BenchmarkEngine retries and outcomes", () => {
 
     const record = result.evaluations[0];
     expect(record?.attempts).toHaveLength(4);
-    expect(record?.attempts.every((attempt) => attempt.state === "failed")).toBe(true);
+    expect(
+      record?.attempts.every((attempt) => attempt.state === "failed"),
+    ).toBe(true);
     const outcome = outcomeFor(result, "a::default", "0");
     expect(outcome).toMatchObject({
       state: "failed",
@@ -663,7 +767,8 @@ describe("BenchmarkEngine retries and outcomes", () => {
       evaluations: [evaluation("a", "g1"), evaluation("b", "g2")],
       fixtures: [fixture("0"), fixture("1")],
       execution: { maxConcurrentGroups: 1 },
-      respond: () => fail("auth", { httpStatus: 401, message: "Invalid API key" }),
+      respond: () =>
+        fail("auth", { httpStatus: 401, message: "Invalid API key" }),
     });
 
     const result = await h.run();
@@ -674,9 +779,14 @@ describe("BenchmarkEngine retries and outcomes", () => {
     expect(outcomeFor(result, "a::default", "0")?.state).toBe("failed");
     expect(outcomeFor(result, "a::default", "1")?.state).toBe("pending");
     expect(
-      h.events.some((event) => event.type === "engine.stopping" && event.reason === "error"),
+      h.events.some(
+        (event) => event.type === "engine.stopping" && event.reason === "error",
+      ),
     ).toBe(true);
-    expect(h.events.at(-1)).toMatchObject({ type: "run.finished", state: "failed" });
+    expect(h.events.at(-1)).toMatchObject({
+      type: "run.finished",
+      state: "failed",
+    });
   });
 
   it("marks exhausted timeout uncertainty as indeterminate instead of failed", async () => {
@@ -705,7 +815,11 @@ describe("BenchmarkEngine retries and outcomes", () => {
       evaluations: [evaluation("a", "g1"), evaluation("b", "g2")],
       fixtures: [fixture("0")],
       execution: { maxConcurrentGroups: 1 },
-      respond: () => fail("configuration", { httpStatus: 402, message: "Insufficient credits" }),
+      respond: () =>
+        fail("configuration", {
+          httpStatus: 402,
+          message: "Insufficient credits",
+        }),
     });
 
     const result = await h.run();
@@ -772,8 +886,11 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
     events: readonly EngineEvent[],
   ): Extract<EngineEvent, { type: "group.cooldown.started" }>[] {
     return events.filter(
-      (event): event is Extract<EngineEvent, { type: "group.cooldown.started" }> =>
-        event.type === "group.cooldown.started" && event.reason === "rate_limit",
+      (
+        event,
+      ): event is Extract<EngineEvent, { type: "group.cooldown.started" }> =>
+        event.type === "group.cooldown.started" &&
+        event.reason === "rate_limit",
     );
   }
 
@@ -823,7 +940,9 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
       respond: () => {
         const step = steps[index] ?? "ok";
         index += 1;
-        return step === "fail" ? fail("rate_limit", { httpStatus: 429 }) : ok("A");
+        return step === "fail"
+          ? fail("rate_limit", { httpStatus: 429 })
+          : ok("A");
       },
     });
 
@@ -843,7 +962,9 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
       random: () => 0,
       respond: (call) => {
         if (groupOf(call.payload.model) === "a") {
-          const aCalls = h.calls.filter((entry) => groupOf(entry.payload.model) === "a").length;
+          const aCalls = h.calls.filter(
+            (entry) => groupOf(entry.payload.model) === "a",
+          ).length;
           if (aCalls <= 2) return fail("rate_limit", { httpStatus: 429 });
         }
         return ok("A");
@@ -853,9 +974,13 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
     const result = await h.run();
 
     expect(result.state).toBe("completed");
-    expect([...new Set(rateLimitCooldowns(h.events).map((event) => event.group))]).toEqual(["ga"]);
+    expect([
+      ...new Set(rateLimitCooldowns(h.events).map((event) => event.group)),
+    ]).toEqual(["ga"]);
     const bCall = h.calls.find((call) => groupOf(call.payload.model) === "b");
-    const aRetry = h.calls.filter((call) => groupOf(call.payload.model) === "a")[1];
+    const aRetry = h.calls.filter(
+      (call) => groupOf(call.payload.model) === "a",
+    )[1];
     expect(bCall?.finishedAt ?? 0).toBeLessThanOrEqual(aRetry?.startedAt ?? 0);
   });
 
@@ -897,7 +1022,7 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
       latencyMs: 5000,
       respond: (call) =>
         groupOf(call.payload.model) === "a"
-          ? fail("rate_limit", { httpStatus: 429, retryAfterMs: 600_000 })
+          ? fail("rate_limit", { httpStatus: 429, retryAfterMs: 1_200_000 })
           : ok("A"),
     });
 
@@ -905,13 +1030,17 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
 
     expect(result.state).toBe("failed");
     expect(result.halt?.category).toBe("rate_limit");
-    expect(h.calls.map((call) => call.payload.model)).toEqual(["vendor/a", "vendor/b"]);
+    expect(h.calls.map((call) => call.payload.model)).toEqual([
+      "vendor/a",
+      "vendor/b",
+    ]);
     // The halting group's fixture stays pending; the other group's request was
     // allowed to finish and settle rather than being cancelled by the halt.
     expect(outcomeFor(result, "a::default", "0")?.state).toBe("pending");
     expect(outcomeFor(result, "b::default", "0")?.state).toBe("settled");
-    const bAttempt = result.evaluations.find((entry) => entry.evaluationId === "b::default")
-      ?.attempts[0];
+    const bAttempt = result.evaluations.find(
+      (entry) => entry.evaluationId === "b::default",
+    )?.attempts[0];
     expect(bAttempt?.state).toBe("completed");
     expect(bAttempt?.finishedAt).toBe("2026-09-23T00:00:05.000Z");
   });
@@ -921,7 +1050,8 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
       evaluations: [evaluation("a", "g1")],
       fixtures: [fixture("0"), fixture("1")],
       execution: { maxConcurrentGroups: 1, maxRetries: 3 },
-      respond: () => fail("rate_limit", { httpStatus: 429, retryAfterMs: 600_000 }),
+      respond: () =>
+        fail("rate_limit", { httpStatus: 429, retryAfterMs: 1_200_000 }),
     });
 
     const result = await h.run();
@@ -942,9 +1072,13 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
       attemptCount: 0,
     });
     expect(result.evaluations[0]?.attempts).toHaveLength(1);
-    expect(result.evaluations[0]?.attempts[0]?.failure?.category).toBe("rate_limit");
+    expect(result.evaluations[0]?.attempts[0]?.failure?.category).toBe(
+      "rate_limit",
+    );
     expect(
-      h.events.some((event) => event.type === "engine.stopping" && event.reason === "error"),
+      h.events.some(
+        (event) => event.type === "engine.stopping" && event.reason === "error",
+      ),
     ).toBe(true);
   });
 
@@ -998,7 +1132,11 @@ describe("BenchmarkEngine rate-limit escalation and halt", () => {
       evaluations: [evaluation("a", "g1")],
       fixtures: [fixture("0")],
       execution: { maxConcurrentGroups: 1, maxRetries: 2 },
-      respond: () => fail("configuration", { httpStatus: 402, message: "Insufficient credits" }),
+      respond: () =>
+        fail("configuration", {
+          httpStatus: 402,
+          message: "Insufficient credits",
+        }),
     });
 
     const halted = await halting.run();
@@ -1065,9 +1203,14 @@ describe("BenchmarkEngine controls", () => {
       attemptCount: 0,
     });
     expect(
-      h.events.some((event) => event.type === "engine.stopping" && event.reason === "user"),
+      h.events.some(
+        (event) => event.type === "engine.stopping" && event.reason === "user",
+      ),
     ).toBe(true);
-    expect(h.events.at(-1)).toMatchObject({ type: "run.finished", state: "stopped" });
+    expect(h.events.at(-1)).toMatchObject({
+      type: "run.finished",
+      state: "stopped",
+    });
   });
 });
 
@@ -1085,7 +1228,10 @@ describe("BenchmarkEngine metrics", () => {
         if (index === 1) return okUnknownCost("B");
         const base = ok("no option here");
         if (!base.ok) return base;
-        return { ok: true, value: { ...base.value, cost: { kind: "estimated", usd: 0.05 } } };
+        return {
+          ok: true,
+          value: { ...base.value, cost: { kind: "estimated", usd: 0.05 } },
+        };
       },
     });
 
@@ -1101,14 +1247,42 @@ describe("BenchmarkEngine metrics", () => {
       totalSelectedAccuracy: 1 / 3,
       scoredResponseCount: 2,
       scoredResponseAccuracy: 0.5,
-      costs: { reportedUsd: 0.001, estimatedUsd: 0.05, knownUsd: 0.001 + 0.05, unknownCount: 1 },
+      costs: {
+        reportedUsd: 0.001,
+        estimatedUsd: 0.05,
+        knownUsd: 0.001 + 0.05,
+        unknownCount: 1,
+      },
     });
-    expect(result.metrics.outcomeCounts).toContainEqual({ kind: "correct", count: 1 });
-    expect(result.metrics.outcomeCounts).toContainEqual({ kind: "incorrect", count: 1 });
-    expect(result.metrics.outcomeCounts).toContainEqual({ kind: "invalid", count: 1 });
+    expect(result.metrics.outcomeCounts).toContainEqual({
+      kind: "correct",
+      count: 1,
+    });
+    expect(result.metrics.outcomeCounts).toContainEqual({
+      kind: "incorrect",
+      count: 1,
+    });
+    expect(result.metrics.outcomeCounts).toContainEqual({
+      kind: "invalid",
+      count: 1,
+    });
     expect(result.metrics.categoryMetrics).toEqual([
-      { category: "math", selected: 1, settled: 1, correct: 1, coverage: 1, accuracy: 1 },
-      { category: "science", selected: 2, settled: 2, correct: 0, coverage: 1, accuracy: 0 },
+      {
+        category: "math",
+        selected: 1,
+        settled: 1,
+        correct: 1,
+        coverage: 1,
+        accuracy: 1,
+      },
+      {
+        category: "science",
+        selected: 2,
+        settled: 2,
+        correct: 0,
+        coverage: 1,
+        accuracy: 0,
+      },
     ]);
     expect(result.metrics.requestLatency.count).toBe(3);
   });
